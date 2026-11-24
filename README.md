@@ -1,5 +1,9 @@
 # m9s
 
+Screenshots: [main screen](screenshots/screenshot_main.jpg) ·
+[passwords at startup](screenshots/screenshot_login.jpg) ·
+[help](screenshots/screenshot_help.jpg)
+
 A terminal-based email client with a three-pane TUI and local draft storage.
 Each account uses one of three providers:
 
