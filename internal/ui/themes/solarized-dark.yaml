@@ -1,0 +1,18 @@
+name: solarized-dark
+colors:
+  background:  "#002b36"
+  foreground:  "#839496"
+  unread:      "#268bd2"
+  selected_bg: "#073642"
+  selected_fg: "#eee8d5"
+  accent:      "#2aa198"
+  dim:         "#586e75"
+  header_bg:   "#073642"
+  header_fg:   "#93a1a1"
+  statusbar_bg: "#073642"
+  label:       "#657b83"
+  border:      "#073642"
+  flash_ok:    "#859900"
+  flash_err:   "#dc322f"
+  warn:        "#b58900"
+  heading:      "#b58900"

@@ -1,0 +1,18 @@
+name: solarized-light
+colors:
+  background:   "#fdf6e3"
+  foreground:   "#657b83"
+  unread:       "#268bd2"
+  selected_bg:  "#eee8d5"
+  selected_fg:  "#073642"
+  accent:       "#2aa198"
+  dim:          "#93a1a1"
+  header_bg:    "#eee8d5"
+  header_fg:    "#586e75"
+  statusbar_bg: "#eee8d5"
+  label:        "#839496"
+  border:       "#eee8d5"
+  flash_ok:     "#859900"
+  flash_err:    "#dc322f"
+  warn:         "#b58900"
+  heading:      "#b58900"

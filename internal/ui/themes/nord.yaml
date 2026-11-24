@@ -1,0 +1,18 @@
+name: nord
+colors:
+  background:   "#2e3440"
+  foreground:   "#d8dee9"
+  unread:       "#88c0d0"
+  selected_bg:  "#434c5e"
+  selected_fg:  "#eceff4"
+  accent:       "#81a1c1"
+  dim:          "#4c566a"
+  header_bg:    "#3b4252"
+  header_fg:    "#e5e9f0"
+  statusbar_bg: "#3b4252"
+  label:        "#616e88"
+  border:       "#4c566a"
+  flash_ok:     "#a3be8c"
+  flash_err:    "#bf616a"
+  warn:         "#ebcb8b"
+  heading:      "#ebcb8b"

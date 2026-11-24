@@ -1,0 +1,28 @@
+# Crush configuration for m9s (https://github.com/charmbracelet/crush).
+#
+# This file is Bash: Crush runs it at startup and project settings here are
+# merged over your global ~/.config/crush/crushrc.
+#
+# No secrets live in this file. The Anthropic API key is read from the
+# environment each time Crush starts:
+#
+#   export ANTHROPIC_API_KEY=sk-ant-...
+#
+# If ANTHROPIC_API_KEY is not set, Crush refuses to start in this folder
+# ("executing shell config .../.crushrc: exit status 1") instead of quietly
+# falling back to another provider from your global config.
+
+# Anthropic API, key from the environment.
+provider add anthropic --api-key "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY to use Crush in this project}"
+
+# Main model for the coding work, and a small fast model for light tasks
+# (session titles, summaries).
+model large anthropic/claude-opus-5-5
+model small anthropic/claude-haiku-5-5
+
+# Go language server, so Crush sees compiler errors and symbols.
+lsp add go --command gopls
+
+# Commits in this repo are a single line: no trailer, no "Generated with" line.
+option attribution-trailer-style none
+option attribution-generated-with false

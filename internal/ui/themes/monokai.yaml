@@ -1,0 +1,18 @@
+name: monokai
+colors:
+  background:   "#272822"
+  foreground:   "#f8f8f2"
+  unread:       "#66d9ef"
+  selected_bg:  "#49483e"
+  selected_fg:  "#f8f8f2"
+  accent:       "#a6e22e"
+  dim:          "#75715e"
+  header_bg:    "#3e3d32"
+  header_fg:    "#f8f8f2"
+  statusbar_bg: "#3e3d32"
+  label:        "#75715e"
+  border:       "#49483e"
+  flash_ok:     "#a6e22e"
+  flash_err:    "#f92672"
+  warn:         "#e6db74"
+  heading:      "#e6db74"

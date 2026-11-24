@@ -1,0 +1,8 @@
+.superpowers/
+/m9s
+.DS_Store
+cover.out
+coverage.out
+env.sh
+env*
+.env/*

@@ -1,0 +1,39 @@
+accounts:
+  - name: gmail
+    imap:
+      host: imap.gmail.com
+      port: 993
+      tls: true
+      user: me@gmail.com
+      password_cmd: "pass email/gmail"
+    smtp:
+      host: smtp.gmail.com
+      port: 587
+      starttls: true
+      user: me@gmail.com
+      password_cmd: "pass email/gmail"
+  # - name: work
+  #   imap:
+  #     host: mail.company.com
+  #     port: 993
+  #     tls: true
+  #     user: me@company.com
+  #     password_cmd: "pass email/work"
+  #   smtp:
+  #     host: mail.company.com
+  #     port: 587
+  #     starttls: true
+  #     user: me@company.com
+  #     password_cmd: "pass email/work"
+
+ui:
+  theme: solarized-dark   # solarized-light, dracula, gruvbox-dark, nord, monokai, or ~/.config/m9s/themes/<name>.yaml
+  # colors:               # optional per-role overrides
+  #   accent: "#ff79c6"
+  editor: $EDITOR
+  date_format: "Jan 02 15:04"
+  mail_list_rows: 10      # messages visible in the mail list; the preview gets the rest (drag the border to change)
+
+search:
+  local_index: ~/.cache/m9s/index
+  server_search: true

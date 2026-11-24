@@ -1,0 +1,18 @@
+name: dracula
+colors:
+  background:   "#282a36"
+  foreground:   "#f8f8f2"
+  unread:       "#8be9fd"
+  selected_bg:  "#44475a"
+  selected_fg:  "#f8f8f2"
+  accent:       "#bd93f9"
+  dim:          "#6272a4"
+  header_bg:    "#44475a"
+  header_fg:    "#f8f8f2"
+  statusbar_bg: "#44475a"
+  label:        "#6272a4"
+  border:       "#44475a"
+  flash_ok:     "#50fa7b"
+  flash_err:    "#ff5555"
+  warn:         "#f1fa8c"
+  heading:      "#f1fa8c"
