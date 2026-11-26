@@ -372,3 +372,13 @@ func TestEnable_everyAccountDisabled(t *testing.T) {
 		t.Errorf("accounts %v, disabled %v", cfg.Accounts, cfg.Disabled)
 	}
 }
+
+func TestLoad_browserThemes(t *testing.T) {
+	cfg, err := config.LoadFromBytes([]byte("ui:\n  browser:\n    light_theme: solarized-light\n    dark_theme: nord\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.Browser.LightTheme != "solarized-light" || cfg.UI.Browser.DarkTheme != "nord" {
+		t.Errorf("browser = %+v", cfg.UI.Browser)
+	}
+}

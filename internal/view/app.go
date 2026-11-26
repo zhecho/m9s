@@ -2121,6 +2121,14 @@ func (ra *RootApp) SetStore(st *store.Store) {
 	}
 }
 
+// SetBrowserThemes sets the palettes of the page b opens (its Light and
+// Dark modes), from ui.browser and ui.theme.
+func (ra *RootApp) SetBrowserThemes(t ui.BrowserThemes) {
+	ra.browser.mu.Lock()
+	ra.browser.themes = t
+	ra.browser.mu.Unlock()
+}
+
 // SetLayoutStatePath restores the layout left last time from path and
 // remembers future changes there.
 func (ra *RootApp) SetLayoutStatePath(path string) {

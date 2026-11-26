@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/zhecho/m9s/internal/mail"
+	"github.com/zhecho/m9s/internal/ui"
 )
 
 func browserMsg() *mail.Message {
@@ -38,7 +39,7 @@ func frameContent(t *testing.T, page string) string {
 }
 
 func TestBrowserPage_showsWhoWhenAndSubject(t *testing.T) {
-	page := browserPage(browserMsg())
+	page := browserPage(browserMsg(), ui.DefaultBrowserThemes())
 	for _, want := range []string{
 		"Alice &lt;alice@example.com&gt;", "me@x.io", "boss@x.io",
 		"Оферта &lt;нова&gt;", "Tue, 03 Nov 2026 14:05", `<meta charset="utf-8">`,
@@ -53,7 +54,7 @@ func TestBrowserPage_htmlMailIsShownAsDesigned(t *testing.T) {
 	msg := browserMsg()
 	msg.TextBody = "plain fallback"
 	msg.HTMLBody = `<html><body><h1 style="color:red">Sale</h1><img src="https://shop.example/banner.png"></body></html>`
-	body := frameContent(t, browserPage(msg))
+	body := frameContent(t, browserPage(msg, ui.DefaultBrowserThemes()))
 	if !strings.Contains(body, `<h1 style="color:red">Sale</h1>`) || !strings.Contains(body, "https://shop.example/banner.png") {
 		t.Errorf("framed mail = %q, want the sender's HTML untouched", body)
 	}
@@ -67,7 +68,7 @@ func TestBrowserPage_embeddedPicturesAreInlined(t *testing.T) {
 	msg := browserMsg()
 	msg.HTMLBody = `<p><img src="cid:logo@m9s"> <img src='CID:logo@m9s'></p>`
 	msg.Attachments = []*mail.Attachment{{Filename: "logo.png", ContentType: "image/png", ContentID: "logo@m9s", Inline: true, Data: png}}
-	body := frameContent(t, browserPage(msg))
+	body := frameContent(t, browserPage(msg, ui.DefaultBrowserThemes()))
 	uri := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 	if strings.Count(body, uri) != 2 || strings.Contains(strings.ToLower(body), "cid:") {
 		t.Errorf("framed mail = %q, want both cid references replaced by %s", body, uri)
@@ -77,7 +78,7 @@ func TestBrowserPage_embeddedPicturesAreInlined(t *testing.T) {
 func TestBrowserPage_mailScriptsCannotRun(t *testing.T) {
 	msg := browserMsg()
 	msg.HTMLBody = `<script>alert(1)</script><p>hi</p>`
-	page := browserPage(msg)
+	page := browserPage(msg, ui.DefaultBrowserThemes())
 	_, after, _ := strings.Cut(page, "<iframe")
 	tag, _, _ := strings.Cut(after, "srcdoc=")
 	if !strings.Contains(tag, "sandbox=") || strings.Contains(tag, "allow-scripts") {
@@ -91,7 +92,7 @@ func TestBrowserPage_mailScriptsCannotRun(t *testing.T) {
 func TestBrowserPage_plainTextMailIsEscapedAndReadable(t *testing.T) {
 	msg := browserMsg()
 	msg.TextBody = "Здравей,\n1 < 2 & <b>not bold</b>"
-	page := browserPage(msg)
+	page := browserPage(msg, ui.DefaultBrowserThemes())
 	if !strings.Contains(page, "Здравей,\n1 &lt; 2 &amp; &lt;b&gt;not bold&lt;/b&gt;") {
 		t.Errorf("plain text must be shown literally:\n%s", page)
 	}
@@ -108,7 +109,7 @@ func TestBrowserPage_pictureAttachmentsShownOthersListed(t *testing.T) {
 		{Filename: "photo.jpg", ContentType: "image/jpeg", Data: jpg},
 		{Filename: "bill <2>.pdf", ContentType: "application/pdf", Data: []byte("%PDF")},
 	}
-	page := browserPage(msg)
+	page := browserPage(msg, ui.DefaultBrowserThemes())
 	if !strings.Contains(page, `src="data:image/jpeg;base64,`+base64.StdEncoding.EncodeToString(jpg)+`"`) {
 		t.Errorf("the attached photo is not shown:\n%s", page)
 	}
@@ -124,7 +125,7 @@ func TestBrowserPage_embeddedPictureUsedByTheHTMLIsNotRepeatedBelow(t *testing.T
 	msg := browserMsg()
 	msg.HTMLBody = `<img src="cid:logo">`
 	msg.Attachments = []*mail.Attachment{{Filename: "logo.png", ContentType: "image/png", ContentID: "logo", Inline: true, Data: []byte("x")}}
-	page := browserPage(msg)
+	page := browserPage(msg, ui.DefaultBrowserThemes())
 	if strings.Contains(page, "logo.png") {
 		t.Errorf("a picture the mail already shows was listed again:\n%s", page)
 	}
@@ -170,7 +171,7 @@ func TestBrowserPage_hostileContentTypeCannotBreakOutOfThePage(t *testing.T) {
 		{Filename: "a.png", ContentType: evil, Data: []byte("x")},
 		{Filename: "b.png", ContentType: evil, ContentID: "x", Inline: true, Data: []byte("x")},
 	}
-	page := browserPage(msg)
+	page := browserPage(msg, ui.DefaultBrowserThemes())
 	if strings.Contains(page, `onerror="alert(1)`) || strings.Contains(frameContent(t, page), "onerror") {
 		t.Errorf("the mail's content type was written into the page as markup:\n%s", page)
 	}
@@ -187,7 +188,7 @@ func TestBrowserPage_onlyKnownPictureTypesAreEmbedded(t *testing.T) {
 		{Filename: "drawing.svg", ContentType: "image/svg+xml", Data: []byte("<svg/>")},
 		{Filename: "page.html", ContentType: "text/html", Data: []byte("<script>1</script>")},
 	}
-	page := browserPage(msg)
+	page := browserPage(msg, ui.DefaultBrowserThemes())
 	if !strings.Contains(page, `src="data:image/jpeg;base64,`) {
 		t.Errorf("a jpeg must be shown:\n%s", page)
 	}
@@ -213,7 +214,7 @@ func frameTag(t *testing.T, page string) string {
 func TestBrowserPage_remoteContentIsOffUntilAsked(t *testing.T) {
 	msg := browserMsg()
 	msg.HTMLBody = `<p><img src="https://track.example/pixel.gif"><a href="https://phish.example">click</a></p>`
-	page := browserPage(msg)
+	page := browserPage(msg, ui.DefaultBrowserThemes())
 	body := frameContent(t, page)
 
 	// The frame's first words are a policy that lets nothing in from the
@@ -246,7 +247,7 @@ func TestBrowserPage_remoteContentIsOffUntilAsked(t *testing.T) {
 func TestBrowserPage_offersToLoadRemoteContent(t *testing.T) {
 	msg := browserMsg()
 	msg.HTMLBody = `<p>hi</p>`
-	page := browserPage(msg)
+	page := browserPage(msg, ui.DefaultBrowserThemes())
 	if !strings.Contains(page, `<button id="allow"`) || !strings.Contains(page, "Load pictures and enable links") {
 		t.Errorf("an HTML mail's page must offer the button:\n%s", page)
 	}
@@ -258,7 +259,7 @@ func TestBrowserPage_offersToLoadRemoteContent(t *testing.T) {
 func TestBrowserPage_plainTextMailHasNothingToUnblock(t *testing.T) {
 	msg := browserMsg()
 	msg.TextBody = "see https://example.com"
-	if page := browserPage(msg); strings.Contains(page, `id="allow"`) {
+	if page := browserPage(msg, ui.DefaultBrowserThemes()); strings.Contains(page, `id="allow"`) {
 		t.Errorf("a plain-text page loads nothing and needs no button:\n%s", page)
 	}
 }
@@ -267,7 +268,121 @@ func TestBrowserPage_embeddedPicturesShowWithoutAsking(t *testing.T) {
 	msg := browserMsg()
 	msg.HTMLBody = `<img src="cid:logo">`
 	msg.Attachments = []*mail.Attachment{{ContentType: "image/png", ContentID: "logo", Inline: true, Data: []byte("x")}}
-	if body := frameContent(t, browserPage(msg)); !strings.Contains(body, `src="data:image/png;base64,`) {
+	if body := frameContent(t, browserPage(msg, ui.DefaultBrowserThemes())); !strings.Contains(body, `src="data:image/png;base64,`) {
 		t.Errorf("pictures the mail carries need no network and must show at once: %q", body)
+	}
+}
+
+func themedPage(t *testing.T, msg *mail.Message) string {
+	t.Helper()
+	return browserPage(msg, ui.BrowserThemes{
+		Light: map[string]string{"background": "#fdf6e3", "accent": "#2aa198"},
+		Dark:  map[string]string{"background": "#282a36", "accent": "#bd93f9"},
+	})
+}
+
+func TestBrowserPage_hasTheFourModeButtonsSystemFirst(t *testing.T) {
+	page := themedPage(t, browserMsg())
+	for _, b := range []string{`data-mode="light">Light<`, `data-mode="dark">Dark<`, `data-mode="system">System<`, `data-mode="original">Original<`} {
+		if !strings.Contains(page, b) {
+			t.Errorf("no button %s", b)
+		}
+	}
+	if !strings.Contains(page, `<html data-theme="system">`) {
+		t.Error("does not open on System")
+	}
+}
+
+func TestBrowserPage_carriesBothPalettesAndFollowsTheSystem(t *testing.T) {
+	page := themedPage(t, browserMsg())
+	for _, want := range []string{`:root[data-theme=light]`, `#fdf6e3`, `:root[data-theme=dark]`, `#282a36`, `#bd93f9`,
+		`@media (prefers-color-scheme: dark)`, `@media (prefers-color-scheme: light)`, `:root[data-theme=system]`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}
+
+// Original is today's page: its stylesheet is still there, and the themed
+// rules never apply to it.
+func TestBrowserPage_originalKeepsTodaysLook(t *testing.T) {
+	page := themedPage(t, browserMsg())
+	if !strings.Contains(page, browserPageStyle) {
+		t.Error("today's stylesheet is gone")
+	}
+	if !strings.Contains(page, `:root:not([data-theme=original])`) {
+		t.Error("themed rules are not kept off Original")
+	}
+}
+
+// In Light, Dark and System the mail itself is drawn in the theme's colours:
+// its frame carries both palettes and rules that override the sender's
+// colours, kept off Original. The guard still comes first, so the button
+// that lifts it leaves the theme in place.
+func TestBrowserPage_mailTakesTheThemesColours(t *testing.T) {
+	msg := browserMsg()
+	msg.HTMLBody = `<table bgcolor="#ffffff"><tr><td><font color="#000000">hi</font></td></tr></table>`
+	frame := frameContent(t, themedPage(t, msg))
+	if !strings.HasPrefix(frame, remoteContentGuard) {
+		t.Fatal("the guard is no longer the first thing in the frame")
+	}
+	style, _, ok := strings.Cut(strings.TrimPrefix(frame, remoteContentGuard), "<table")
+	if !ok {
+		t.Fatal("the mail is gone")
+	}
+	for _, want := range []string{"<style>", "#fdf6e3", "#282a36", ":root[data-theme=light]", ":root[data-theme=dark]",
+		"@media (prefers-color-scheme: dark)", ":not([data-theme=original])", "!important"} {
+		if !strings.Contains(style, want) {
+			t.Errorf("frame style lacks %q", want)
+		}
+	}
+}
+
+// The page tells the frame which mode is on, when it loads (also after the
+// guard is lifted) and on every button press.
+func TestBrowserPage_switchReachesTheMail(t *testing.T) {
+	msg := browserMsg()
+	msg.HTMLBody = "<p>hi</p>"
+	page := themedPage(t, msg)
+	if !strings.Contains(page, "contentDocument.documentElement.dataset.theme") {
+		t.Error("the mode is never handed to the mail's frame")
+	}
+}
+
+// Review focus 4 and 5: the switch works on every kind of page, and a
+// refused storage does not break it.
+func TestBrowserPage_switchScriptOnEveryPage(t *testing.T) {
+	plain := browserMsg()
+	plain.TextBody = "hello"
+	for name, msg := range map[string]*mail.Message{"plain": plain, "empty": browserMsg()} {
+		page := themedPage(t, msg)
+		if !strings.Contains(page, "m9s.browser.theme") || strings.Count(page, "try {") < 2 {
+			t.Errorf("%s: switch script missing or storage not guarded", name)
+		}
+	}
+}
+
+// The config's palettes reach the page the app writes (Task 2's wiring).
+func TestSetBrowserThemes_reachesThePage(t *testing.T) {
+	ra := newWiredRootApp(t, "a")
+	ra.browser.base = t.TempDir()
+	ra.SetBrowserThemes(ui.BrowserThemes{Light: map[string]string{"background": "#abcdef"}, Dark: map[string]string{"background": "#123456"}})
+	path, err := ra.browser.write(browserMsg())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), "#abcdef") || !strings.Contains(string(data), "#123456") {
+		t.Error("the configured palettes are not on the page")
+	}
+}
+
+// The frame's protections are untouched.
+func TestBrowserPage_themesLeaveTheGuardAlone(t *testing.T) {
+	msg := browserMsg()
+	msg.HTMLBody = "<p>hi</p>"
+	page := themedPage(t, msg)
+	if !strings.Contains(page, `sandbox="`+frameSandbox+`"`) || !strings.Contains(frameContent(t, page), remoteContentGuard) {
+		t.Error("theming changed the frame's protections")
 	}
 }

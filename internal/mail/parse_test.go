@@ -168,3 +168,50 @@ func TestIsFile(t *testing.T) {
 		}
 	}
 }
+
+// The browser page's "Email headers" panel shows every header field exactly
+// as received, in order — folded lines and encoded words included — the
+// mail's size and its parts.
+func TestParseMessage_keepsHeadersSizeAndParts(t *testing.T) {
+	raw := "Received: from mail.example.com\r\n\tby mx.google.com; Tue, 3 Nov 2026\r\n" +
+		"Subject: =?UTF-8?B?0J7RhNC10YDRgtCw?=\r\n" +
+		"From: a@example.com\r\n" +
+		"Received: from laptop by mail.example.com\r\n" +
+		mailWithEmbeddedPicture[strings.Index(mailWithEmbeddedPicture, "MIME-Version"):]
+	msg := mail.ParseMessage(&mail.Envelope{}, []byte(raw))
+
+	var keys []string
+	for _, f := range msg.Headers {
+		keys = append(keys, f.Key)
+	}
+	if got := strings.Join(keys, ","); got != "Received,Subject,From,Received,MIME-Version,Content-Type" {
+		t.Errorf("header order = %s", got)
+	}
+	if msg.Headers[0].Raw != "Received: from mail.example.com\r\n\tby mx.google.com; Tue, 3 Nov 2026" {
+		t.Errorf("first field = %q, want it exactly as received", msg.Headers[0].Raw)
+	}
+	if got := msg.HeaderValues("received"); len(got) != 2 || got[0] != "from mail.example.com by mx.google.com; Tue, 3 Nov 2026" {
+		t.Errorf("HeaderValues(received) = %q, want unfolded values in order", got)
+	}
+	if msg.Size != len(raw) {
+		t.Errorf("Size = %d, want %d", msg.Size, len(raw))
+	}
+	var parts []string
+	for _, p := range msg.Parts {
+		parts = append(parts, strings.Repeat(">", p.Depth)+p.ContentType+":"+p.Filename)
+	}
+	want := "multipart/mixed:,>multipart/related:,>>text/html:,>>image/png:logo.png,>application/pdf:" + pdfName(t, msg)
+	if got := strings.Join(parts, ","); got != want {
+		t.Errorf("parts = %s\nwant    %s", got, want)
+	}
+}
+
+func pdfName(t *testing.T, msg *mail.Message) string {
+	t.Helper()
+	for _, a := range msg.Attachments {
+		if a.ContentType == "application/pdf" {
+			return a.Filename
+		}
+	}
+	return ""
+}

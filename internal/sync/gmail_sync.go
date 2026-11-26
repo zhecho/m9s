@@ -286,7 +286,7 @@ func (e *GmailEngine) reconcile(ctx context.Context, f syncedFolder) error {
 	// they are reused rather than fetched again (20 quota units each).
 	reused, fetch := e.storedElsewhere(added, isUnread, isStarred)
 	for chunk := range slices.Chunk(reused, gmailFetchChunk) {
-		if err := e.store.AddMessages(e.cfg.Name, f.name, chunk); err != nil {
+		if err := e.addListed(f.name, chunk); err != nil {
 			return err
 		}
 		have += len(chunk)
@@ -303,7 +303,7 @@ func (e *GmailEngine) reconcile(ctx context.Context, f syncedFolder) error {
 		for i, m := range metas {
 			envs[i] = envelopeOf(m)
 		}
-		if err := e.store.AddMessages(e.cfg.Name, f.name, envs); err != nil {
+		if err := e.addListed(f.name, envs); err != nil {
 			return err
 		}
 		have += len(chunk) // a message deleted meanwhile is done with too
@@ -436,12 +436,24 @@ func flagsOf(labels []string) []string {
 	return flags
 }
 
+// addListed stores envelopes a listing of folder found, leaving out the
+// messages deleted for good since the listing.
+func (e *GmailEngine) addListed(folder string, envs []*mail.Envelope) error {
+	e.applyMu.Lock()
+	defer e.applyMu.Unlock()
+	keep := slices.DeleteFunc(slices.Clone(envs), func(env *mail.Envelope) bool { return e.deleted[env.ID] })
+	return e.store.AddMessages(e.cfg.Name, folder, keep)
+}
+
 // applyMeta makes the store hold m in exactly the synced folders whose label
 // it carries, with its current flags everywhere.
 func (e *GmailEngine) applyMeta(m *gmail.MsgMeta) error {
 	env := envelopeOf(m)
 	e.applyMu.Lock()
 	defer e.applyMu.Unlock()
+	if e.deleted[m.ID] {
+		return nil // fetched before it was deleted for good
+	}
 	for _, f := range e.syncedFolders() {
 		var err error
 		if member(m.LabelIDs, f.label) {
@@ -477,6 +489,9 @@ func (e *GmailEngine) forget(ids []string) error {
 		return nil
 	}
 	e.applyMu.Lock()
+	for _, id := range ids {
+		e.deleted[id] = true
+	}
 	for _, f := range e.syncedFolders() {
 		if err := e.store.RemoveMessages(e.cfg.Name, f.name, ids); err != nil {
 			e.applyMu.Unlock()

@@ -3,8 +3,10 @@ package mail
 import (
 	"bytes"
 	"io"
+	"regexp"
 	"strings"
 
+	"github.com/emersion/go-message"
 	gomail "github.com/emersion/go-message/mail"
 )
 
@@ -15,8 +17,67 @@ func ParseMessage(env *Envelope, raw []byte) *Message {
 	msg := &Message{Envelope: env}
 	if len(raw) > 0 {
 		parseBody(msg, raw)
+		msg.Headers = headerFields(raw)
+		msg.Size = len(raw)
+		msg.Parts = mimeParts(raw)
 	}
 	return msg
+}
+
+// headerStart matches a line that begins a new header field.
+var headerStart = regexp.MustCompile(`^[!-9;-~]+:`)
+
+// headerFields splits the raw header block (up to the first empty line)
+// into its fields, keeping each one's lines as received.
+func headerFields(raw []byte) []HeaderField {
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	if end := strings.Index(text, "\n\n"); end >= 0 {
+		text = text[:end]
+	}
+	var fields []HeaderField
+	for _, line := range strings.Split(text, "\n") {
+		switch {
+		case line == "":
+		case (line[0] == ' ' || line[0] == '\t') && len(fields) > 0:
+			fields[len(fields)-1].Raw += "\r\n" + line
+		case headerStart.MatchString(line):
+			key, _, _ := strings.Cut(line, ":")
+			fields = append(fields, HeaderField{Key: key, Raw: line})
+		}
+	}
+	return fields
+}
+
+// mimeParts lists the message's MIME structure, depth first; nil when it
+// cannot be read.
+func mimeParts(raw []byte) []Part {
+	e, err := message.Read(bytes.NewReader(raw))
+	if e == nil {
+		return nil
+	}
+	_ = err // an unknown charset still gives a readable entity
+	var parts []Part
+	_ = e.Walk(func(path []int, part *message.Entity, err error) error {
+		if err != nil {
+			return nil
+		}
+		ct, _, _ := part.Header.ContentType()
+		p := Part{Depth: len(path), ContentType: ct}
+		if _, params, perr := part.Header.ContentDisposition(); perr == nil {
+			p.Filename = params["filename"]
+		}
+		if p.Filename == "" {
+			_, params, _ := part.Header.ContentType()
+			p.Filename = params["name"]
+		}
+		if part.MultipartReader() == nil {
+			n, _ := io.Copy(io.Discard, part.Body)
+			p.Size = int(n)
+		}
+		parts = append(parts, p)
+		return nil
+	})
+	return parts
 }
 
 // parseBody parses a raw RFC 5322 message into text/html parts.

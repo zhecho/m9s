@@ -145,6 +145,16 @@ type UIConfig struct {
 	MailListRows int `yaml:"mail_list_rows"`
 	// AttachmentDir is where s saves attachments without asking; "" asks.
 	AttachmentDir string `yaml:"attachment_dir"`
+	// Browser picks the themes of the page b opens.
+	Browser BrowserUIConfig `yaml:"browser"`
+}
+
+// BrowserUIConfig names the themes of the browser page's Light and Dark
+// modes; "" means ui.theme when it is light (dark), else solarized-light
+// (solarized-dark).
+type BrowserUIConfig struct {
+	LightTheme string `yaml:"light_theme"`
+	DarkTheme  string `yaml:"dark_theme"`
 }
 
 // ThemeName returns the configured theme, honouring the legacy skin: key.

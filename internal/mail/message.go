@@ -92,6 +92,47 @@ type Message struct {
 	TextBody    string
 	HTMLBody    string
 	Attachments []*Attachment
+	// Headers are the message's header fields exactly as received, top to
+	// bottom; Size is the raw message in bytes; Parts is its MIME structure.
+	// All empty for a message whose content was never downloaded.
+	Headers []HeaderField
+	Size    int
+	Parts   []Part
+}
+
+// HeaderField is one header field as received: Raw keeps its folded lines
+// (without the final line break), Key is its name as written.
+type HeaderField struct {
+	Key string
+	Raw string
+}
+
+// Value is the field's value unfolded onto one line, still as written (an
+// encoded word stays encoded).
+func (f HeaderField) Value() string {
+	_, v, _ := strings.Cut(f.Raw, ":")
+	return strings.Join(strings.Fields(v), " ")
+}
+
+// Part is one MIME part: Depth is 0 for the message itself; Size is the
+// decoded content of a leaf part (0 for a multipart).
+type Part struct {
+	Depth       int
+	ContentType string
+	Filename    string
+	Size        int
+}
+
+// HeaderValues returns the unfolded values of every field named key (any
+// case), top to bottom.
+func (m *Message) HeaderValues(key string) []string {
+	var out []string
+	for _, f := range m.Headers {
+		if strings.EqualFold(f.Key, key) {
+			out = append(out, f.Value())
+		}
+	}
+	return out
 }
 
 // Files returns the attachments a reader would save: everything except what

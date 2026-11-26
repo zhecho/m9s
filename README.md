@@ -294,6 +294,24 @@ a colour name (`red`, `navy`, …) or `default`.
 An unknown theme, unknown role or invalid colour does not stop m9s: the default is
 used and a warning is shown in the status bar and the log (`l`).
 
+The page `b` opens in the browser has a Light and a Dark mode (see
+[Reading a message in the browser](#reading-a-message-in-the-browser)). Their
+themes:
+
+```yaml
+ui:
+  browser:
+    light_theme: solarized-light   # default: ui.theme if it is light, else solarized-light
+    dark_theme:  solarized-dark    # default: ui.theme if it is dark, else solarized-dark
+```
+
+Both take any built-in or custom theme name. `ui.colors` applies only to the
+mode whose theme is `ui.theme`. A theme counts as light when its `background`
+is a light colour; with `background: default` (a see-through terminal), when
+its text is dark. A theme that cannot be loaded is replaced by plain
+`solarized-light` (Light) or `solarized-dark` (Dark), with a warning. A colour
+set to `default` takes that mode's Solarized colour.
+
 ### KeePassXC setup
 
 m9s can take secrets — IMAP/SMTP passwords, the Gmail client and token, the
@@ -952,6 +970,42 @@ address before you click.
 The page is a temporary file in a private folder and is deleted when m9s
 quits. Only PNG, JPEG, GIF, WebP, AVIF and BMP pictures are shown; anything
 else (SVG and HTML attachments included) is listed by name.
+
+Four buttons at the top right set the page's colours:
+
+| Button | Colours |
+|--------|---------|
+| **Light** | the light theme (`ui.browser.light_theme`, see [Themes](#themes)) |
+| **Dark** | the dark theme (`ui.browser.dark_theme`) |
+| **System** (default) | Light or Dark as your computer is set, switching when it does |
+| **Original** | the page without a theme, and HTML mail in its sender's own colours |
+
+In Light, Dark and System the whole page takes the theme's colours,
+HTML mail included: one background and text colour for the mail, links in
+the theme's accent, borders in its border colour. Pictures are left as they
+are. Mail designed with coloured buttons or banners loses that look, and a
+picture with dark text on a see-through background can be hard to read on a
+dark page; **Original** shows the mail as its sender made it. The choice is
+remembered for the next `b` in Chrome and Safari. Firefox keeps nothing for
+local files, so there it starts at System.
+
+**Email headers**, next to **Load pictures and enable links** (in a bar of
+its own on plain-text mail, and still there after the pictures are loaded),
+opens a panel under From/To/Date and closes it again. On top it sums up what
+is worth checking:
+
+| Row | From |
+|-----|------|
+| Size | the whole message as received |
+| Message-ID, Return-Path, Reply-To | those header fields |
+| Sent with | `X-Mailer` or `User-Agent` |
+| Checks | SPF, DKIM (with the signing domain) and DMARC, as the receiving server reported them in `Authentication-Results` |
+| Route | the servers the mail passed, oldest first, from the `Received` fields |
+| Parts | the MIME parts, with their type, file name and size |
+
+Below that come all header fields, exactly as received and in order (like
+Gmail's "Show original"). It is the sender's text, shown as text only. A
+message whose content is not downloaded yet has no headers to show.
 
 ### Attachments
 

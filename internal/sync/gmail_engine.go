@@ -34,6 +34,11 @@ type GmailEngine struct {
 
 	labelOf map[string]string // folder name -> label id, for every shown folder (guarded by mu)
 
+	// deleted are the messages this run deleted for good or saw deleted
+	// (guarded by applyMu). Gmail never reuses an id, so nothing fetched
+	// before the delete may store one of them again.
+	deleted map[string]bool
+
 	runCtx  context.Context // the context Start was given (guarded by mu)
 	allMail allMailState    // All Mail's last listing (guarded by mu)
 }
@@ -54,7 +59,7 @@ func (e *GmailEngine) KeepsStore() bool { return true }
 // NewGmailEngine creates the engine of a Gmail account. api must already
 // carry the account's sign-in.
 func NewGmailEngine(cfg *config.Account, events chan<- Event, st *store.Store, ds *draft.Store, api *gmail.Client) *GmailEngine {
-	e := &GmailEngine{pollCore: newPollCore(cfg, events, st, ds), api: api, labelOf: map[string]string{}}
+	e := &GmailEngine{pollCore: newPollCore(cfg, events, st, ds), api: api, labelOf: map[string]string{}, deleted: map[string]bool{}}
 	e.pollCore.api = e
 	return e
 }

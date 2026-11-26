@@ -66,8 +66,11 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Load theme: built-in or ~/.config/m9s/themes/<name>.yaml, plus ui.colors overrides
 	home, _ := os.UserHomeDir()
-	skin, themeWarns := ui.ResolveTheme(cfg.UI.ThemeName(),
-		filepath.Join(home, ".config", "m9s", "themes"), cfg.UI.Colors)
+	themesDir := filepath.Join(home, ".config", "m9s", "themes")
+	skin, themeWarns := ui.ResolveTheme(cfg.UI.ThemeName(), themesDir, cfg.UI.Colors)
+	// The page b opens: its Light and Dark modes (ui.browser), from the same themes.
+	browserThemes, browserWarns := ui.ResolveBrowserThemes(skin, cfg.UI.Browser.LightTheme, cfg.UI.Browser.DarkTheme, themesDir)
+	themeWarns = append(themeWarns, browserWarns...)
 
 	// Load keybindings
 	kbPath := filepath.Join(home, ".config", "m9s", "keybindings.yaml")
@@ -156,6 +159,7 @@ func run(cmd *cobra.Command, args []string) error {
 		go s.run(cmd.Context())
 	}
 	rootView := view.NewRootApp(uiApp, cfg, manager, engines, draftStore, events)
+	rootView.SetBrowserThemes(browserThemes)
 	rootView.SetLayoutStatePath(config.DefaultLayoutStatePath())
 	rootView.SetConfigPath(cfgPath)
 	rootView.SetReadme(readme)

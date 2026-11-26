@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/zhecho/m9s/internal/mail"
+	"github.com/zhecho/m9s/internal/ui"
 )
 
 // cidRef matches a reference to a picture carried inside the mail.
@@ -39,6 +40,119 @@ pre { margin: 0; padding: 16px; white-space: pre-wrap; word-break: break-word; f
 .files figure { margin: 0 0 16px; }
 .files img { max-width: 100%; height: auto; }
 .files figcaption, .files li { color: #5b6470; }
+`
+
+// browserModes are the page's colour modes, in the order of their buttons.
+// System (the default) follows the computer's dark/light setting; Original
+// is the page as it was before themes: browserPageStyle alone.
+var browserModes = []struct{ mode, label string }{
+	{"light", "Light"}, {"dark", "Dark"}, {"system", "System"}, {"original", "Original"},
+}
+
+// browserThemeVars maps theme roles to the page's CSS custom properties.
+var browserThemeVars = []struct{ role, name string }{
+	{"background", "--bg"}, {"foreground", "--fg"}, {"header_bg", "--head-bg"}, {"label", "--label"},
+	{"heading", "--heading"}, {"border", "--border"}, {"warn", "--warn"}, {"accent", "--accent"}, {"dim", "--dim"},
+}
+
+// cssHex accepts only "#rrggbb": nothing else reaches the page's CSS.
+var cssHex = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// browserModeRules styles the mode buttons and, in every mode but Original,
+// draws the page in the theme's colours. Each var() falls back to the
+// Original colour, so a palette missing a role still draws. The mail itself
+// is recoloured inside its frame (mailThemeRules).
+const browserModeRules = `
+.modes { float: right; display: flex; gap: 4px; margin-left: 12px; }
+.modes button { font: inherit; font-size: 12px; padding: 2px 10px; border: 1px solid #c4c9d0; border-radius: 4px; background: #fff; color: #1a1a1a; cursor: pointer; }
+.modes button[aria-pressed=true] { background: #1a1a1a; border-color: #1a1a1a; color: #fff; }
+:root:not([data-theme=original]) body { background: var(--bg, #fff); color: var(--fg, #1a1a1a); }
+:root:not([data-theme=original]) .head { background: var(--head-bg, #f4f5f7); border-bottom-color: var(--border, #d9dce1); }
+:root:not([data-theme=original]) .head h1 { color: var(--heading, inherit); }
+:root:not([data-theme=original]) .head th { color: var(--label, #5b6470); }
+:root:not([data-theme=original]) .guard { background: var(--head-bg, #fff8e1); color: var(--warn, inherit); border-bottom-color: var(--border, #ead9a0); }
+:root:not([data-theme=original]) .guard.nudge { background: var(--bg, #ffe9a8); }
+:root:not([data-theme=original]) button { border-color: var(--accent, #8a6d00); background: var(--bg, #fff); color: var(--accent, #1a1a1a); }
+:root:not([data-theme=original]) .guard button:hover { background: var(--head-bg, #fdf3cf); }
+:root:not([data-theme=original]) .modes button[aria-pressed=true] { background: var(--accent, #1a1a1a); color: var(--bg, #fff); }
+:root:not([data-theme=original]) pre { color: var(--fg, inherit); }
+:root:not([data-theme=original]) .files { border-top-color: var(--border, #d9dce1); }
+:root:not([data-theme=original]) .files h2, :root:not([data-theme=original]) .files figcaption, :root:not([data-theme=original]) .files li { color: var(--dim, #5b6470); }
+:root:not([data-theme=original]) a { color: var(--accent, inherit); }
+:root:not([data-theme=original]) iframe { background: var(--bg, #fff); }
+`
+
+// mailThemeRules redraw the sender's HTML in the theme's colours in every
+// mode but Original: one background and text colour for the whole mail,
+// links in the accent colour, borders in the border colour. Pictures are
+// left alone. They apply once the page has told the frame its mode, so
+// without that (Original, or before it loads) the mail keeps its own colours.
+const mailThemeRules = `
+:root[data-theme]:not([data-theme=original]), :root[data-theme]:not([data-theme=original]) body { background: var(--bg, #fff) !important; color: var(--fg, #1a1a1a) !important; }
+:root[data-theme]:not([data-theme=original]) body * { background-color: transparent !important; color: inherit !important; border-color: var(--border, #d9dce1) !important; }
+:root[data-theme]:not([data-theme=original]) a, :root[data-theme]:not([data-theme=original]) a * { color: var(--accent, #0645ad) !important; }
+`
+
+// mailThemeStyle is the stylesheet put into the mail's frame, after the
+// guard: the same palettes as the page, and mailThemeRules.
+func mailThemeStyle(themes ui.BrowserThemes) string {
+	return "<style>" + browserPalettes(themes) + mailThemeRules + "</style>"
+}
+
+// browserThemeStyle is the stylesheet that follows browserPageStyle: the
+// palettes and browserModeRules.
+func browserThemeStyle(themes ui.BrowserThemes) string {
+	return browserPalettes(themes) + browserModeRules + browserInfoRules
+}
+
+// browserPalettes are the Light and Dark palettes as custom properties on
+// :root, by its data-theme; System picks one by the computer's setting.
+func browserPalettes(themes ui.BrowserThemes) string {
+	vars := func(scheme string, p map[string]string) string {
+		var b strings.Builder
+		b.WriteString("color-scheme: " + scheme + ";")
+		for _, v := range browserThemeVars {
+			if c := p[v.role]; cssHex.MatchString(c) {
+				b.WriteString(" " + v.name + ": " + c + ";")
+			}
+		}
+		return b.String()
+	}
+	light, dark := vars("light", themes.Light), vars("dark", themes.Dark)
+	return fmt.Sprintf(":root[data-theme=light] { %s }\n:root[data-theme=dark] { %s }\n"+
+		"@media (prefers-color-scheme: light) { :root[data-theme=system] { %s } }\n"+
+		"@media (prefers-color-scheme: dark) { :root[data-theme=system] { %s } }\n",
+		light, dark, light, dark)
+}
+
+// browserModeHead runs before the page is drawn: it takes the mode chosen
+// last time, so the page does not flash System first. A browser that keeps
+// nothing for local files (or refuses storage) leaves System.
+const browserModeHead = `try { var m = localStorage.getItem('m9s.browser.theme'); if (/^(light|dark|system|original)$/.test(m)) document.documentElement.dataset.theme = m; } catch (e) {}`
+
+// browserModeScript makes the mode buttons work, remembers the choice and
+// hands the mode to the mail's frame (which runs no scripts of its own)
+// whenever it loads — also after the guard is lifted — and on every press.
+const browserModeScript = `
+(function () {
+  const root = document.documentElement;
+  const buttons = document.querySelectorAll('.modes button');
+  const frame = document.getElementById('mail');
+  function mark() { for (const b of buttons) b.setAttribute('aria-pressed', String(b.dataset.mode === root.dataset.theme)); }
+  function sync() {
+    try { if (frame && frame.contentDocument) frame.contentDocument.documentElement.dataset.theme = root.dataset.theme; } catch (e) {}
+    if (frame && typeof fit === 'function') fit();
+  }
+  if (frame) frame.addEventListener('load', sync);
+  for (const b of buttons) b.addEventListener('click', () => {
+    root.dataset.theme = b.dataset.mode;
+    mark();
+    sync();
+    try { localStorage.setItem('m9s.browser.theme', b.dataset.mode); } catch (e) {}
+  });
+  mark();
+  sync();
+})();
 `
 
 // remoteContentGuard is the first thing in the mail's frame until the reader
@@ -90,7 +204,9 @@ window.addEventListener('resize', fit);
 document.getElementById('allow').addEventListener('click', () => {
   allowed = true;
   f.srcdoc = f.srcdoc.slice(Number(f.dataset.guardLen));
-  bar.remove();
+  bar.querySelector('span').remove();
+  document.getElementById('allow').remove();
+  bar.className = 'bar';
 });
 `
 
@@ -103,17 +219,23 @@ document.getElementById('allow').addEventListener('click', () => {
 // itself (cid: references) are inlined when they are a known picture format.
 // Everything the mail would fetch from the network, and its links, stay off
 // until the reader presses the button on top of the page (remoteContentGuard).
-func browserPage(msg *mail.Message) string {
+func browserPage(msg *mail.Message, themes ui.BrowserThemes) string {
 	env := msg.Envelope
 	if env == nil {
 		env = &mail.Envelope{}
 	}
 	var b strings.Builder
-	b.WriteString("<!doctype html>\n<html><head><meta charset=\"utf-8\">\n")
+	b.WriteString("<!doctype html>\n<html data-theme=\"system\"><head><meta charset=\"utf-8\">\n")
+	fmt.Fprintf(&b, "<script>%s</script>\n", browserModeHead)
 	b.WriteString("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
-	fmt.Fprintf(&b, "<title>%s</title>\n<style>%s</style></head><body>\n", html.EscapeString(env.Subject), browserPageStyle)
+	fmt.Fprintf(&b, "<title>%s</title>\n<style>%s</style>\n<style>%s</style></head><body>\n",
+		html.EscapeString(env.Subject), browserPageStyle, browserThemeStyle(themes))
 
-	fmt.Fprintf(&b, "<div class=\"head\"><h1>%s</h1><table>\n", html.EscapeString(env.Subject))
+	b.WriteString("<div class=\"head\"><div class=\"modes\" role=\"group\" aria-label=\"Page colours\">")
+	for _, m := range browserModes {
+		fmt.Fprintf(&b, "<button type=\"button\" aria-pressed=\"%t\" data-mode=\"%s\">%s</button>", m.mode == "system", m.mode, m.label)
+	}
+	fmt.Fprintf(&b, "</div><h1>%s</h1><table>\n", html.EscapeString(env.Subject))
 	row := func(label, value string) {
 		if value != "" {
 			fmt.Fprintf(&b, "<tr><th>%s</th><td>%s</td></tr>\n", label, html.EscapeString(value))
@@ -126,20 +248,23 @@ func browserPage(msg *mail.Message) string {
 		row("Date", env.Date.Format("Mon, 02 Jan 2006 15:04 -0700"))
 	}
 	b.WriteString("</table></div>\n")
+	b.WriteString(browserInfoPanel(msg))
 
 	used := map[*mail.Attachment]bool{}
 	switch {
 	case strings.TrimSpace(msg.HTMLBody) != "":
-		doc := remoteContentGuard + `<base target="_blank">` + inlineEmbedded(msg, used)
+		doc := remoteContentGuard + `<base target="_blank">` + mailThemeStyle(themes) + inlineEmbedded(msg, used)
 		b.WriteString("<div class=\"guard\" id=\"guard\"><span>Pictures from the internet and links are off, " +
 			"so the sender cannot tell that you opened this mail.</span>" +
-			"<button id=\"allow\" type=\"button\">Load pictures and enable links</button></div>\n")
+			"<button id=\"allow\" type=\"button\">Load pictures and enable links</button>" + browserInfoButton + "</div>\n")
 		fmt.Fprintf(&b, "<iframe id=\"mail\" sandbox=\"%s\" data-guard-len=\"%d\" srcdoc=\"%s\"></iframe>\n",
 			frameSandbox, len(remoteContentGuard), html.EscapeString(doc))
 		fmt.Fprintf(&b, "<script>%s</script>\n", browserPageScript)
 	case msg.TextBody != "":
+		b.WriteString("<div class=\"bar\">" + browserInfoButton + "</div>\n")
 		fmt.Fprintf(&b, "<pre>%s</pre>\n", html.EscapeString(msg.TextBody))
 	default:
+		b.WriteString("<div class=\"bar\">" + browserInfoButton + "</div>\n")
 		b.WriteString("<pre>(this message has no text)</pre>\n")
 	}
 
@@ -172,6 +297,7 @@ func browserPage(msg *mail.Message) string {
 		}
 		b.WriteString("</div>\n")
 	}
+	fmt.Fprintf(&b, "<script>%s%s</script>\n", browserModeScript, browserInfoScript)
 	b.WriteString("</body></html>\n")
 	return b.String()
 }
@@ -246,9 +372,10 @@ func addressList(addrs []mail.Address) string {
 // created on first use and removed by cleanup. base "" means the system's
 // temporary directory.
 type browserFiles struct {
-	base string
-	mu   sync.Mutex
-	dir  string
+	base   string
+	mu     sync.Mutex
+	dir    string
+	themes ui.BrowserThemes // the page's Light and Dark palettes; zero: the defaults
 }
 
 // write renders msg to a new page and returns its path.
@@ -262,7 +389,11 @@ func (bf *browserFiles) write(msg *mail.Message) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := f.WriteString(browserPage(msg)); err != nil {
+	themes := bf.themes
+	if themes.Light == nil && themes.Dark == nil {
+		themes = ui.DefaultBrowserThemes()
+	}
+	if _, err := f.WriteString(browserPage(msg, themes)); err != nil {
 		f.Close()
 		return "", err
 	}
