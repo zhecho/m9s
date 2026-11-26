@@ -458,16 +458,22 @@ func (e *GmailEngine) applyMeta(m *gmail.MsgMeta) error {
 }
 
 // applyLabels applies the labels Gmail reported for ids (Labels of a
-// history change) to the stored messages, keeping their envelopes. It
-// returns the ids it could not: not stored, or no labels reported.
+// history change) to the stored messages, keeping their envelopes. One not
+// stored whose labels file it under no synced folder (archived, say) needs
+// nothing. It returns the ids it could not: no labels reported, or a
+// message to store that is not stored yet.
 func (e *GmailEngine) applyLabels(ids []string, labels map[string][]string) (unknown []string, err error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	stored := e.store.EnvelopesByID(e.cfg.Name, ids)
+	folders := e.syncedFolders()
 	for _, id := range ids {
 		env, ok := stored[id]
 		l, known := labels[id]
+		if known && !ok && !slices.ContainsFunc(folders, func(f syncedFolder) bool { return member(l, f.label) }) {
+			continue
+		}
 		if !ok || !known {
 			unknown = append(unknown, id)
 			continue
@@ -499,6 +505,81 @@ func (e *GmailEngine) applyEnvelope(env *mail.Envelope, labels []string) error {
 		}
 	}
 	return e.store.SetFlagsEverywhere(e.cfg.Name, map[string][]string{env.ID: env.Flags})
+}
+
+// labelledLocally shows envs as Gmail files them once labels on are added
+// and off removed: rows join or leave the synced folders of those labels
+// (none while in Trash or Spam, see member) and UNREAD and STARRED change
+// the flags — nothing need be fetched. It reports false, changing nothing,
+// for a change to TRASH or SPAM, which moves a message out of every label:
+// the caller then fetches. The poll that follows confirms it.
+func (e *GmailEngine) labelledLocally(envs []*mail.Envelope, on, off []string) bool {
+	for _, l := range slices.Concat(on, off) {
+		if l == "TRASH" || l == "SPAM" {
+			return false
+		}
+	}
+	e.applyMu.Lock()
+	defer e.applyMu.Unlock()
+	folders := e.syncedFolders()
+	flags := make(map[string][]string, len(envs))
+	for _, env := range envs {
+		if e.deleted[env.ID] {
+			continue
+		}
+		f := slices.Clone(env.Flags)
+		set := func(flag string, want bool) {
+			f = slices.DeleteFunc(f, func(x string) bool { return x == flag })
+			if want {
+				f = append(f, flag)
+			}
+		}
+		for _, l := range on {
+			switch l {
+			case "UNREAD":
+				set(`\Seen`, false)
+			case "STARRED":
+				set(`\Flagged`, true)
+			}
+		}
+		for _, l := range off {
+			switch l {
+			case "UNREAD":
+				set(`\Seen`, true)
+			case "STARRED":
+				set(`\Flagged`, false)
+			}
+		}
+		cp := *env
+		cp.Flags = f
+		flags[env.ID] = f
+		binned := e.binnedLocked(folders, env.ID)
+		for _, fo := range folders {
+			var err error
+			switch {
+			case slices.Contains(off, fo.label):
+				err = e.store.RemoveMessages(e.cfg.Name, fo.name, []string{env.ID})
+			case slices.Contains(on, fo.label) && !binned:
+				err = e.store.AddMessages(e.cfg.Name, fo.name, []*mail.Envelope{&cp})
+			}
+			if err != nil {
+				return false
+			}
+		}
+	}
+	return e.store.SetFlagsEverywhere(e.cfg.Name, flags) == nil
+}
+
+// binnedLocked reports whether id has a row in the synced Trash or Spam.
+func (e *GmailEngine) binnedLocked(folders []syncedFolder, id string) bool {
+	for _, f := range folders {
+		if f.label == "TRASH" || f.label == "SPAM" {
+			if _, ok := e.store.Envelope(e.cfg.Name, f.name, id); ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // trashedLocally shows envs as Gmail files them once trashed: in Trash and

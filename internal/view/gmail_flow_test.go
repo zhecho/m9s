@@ -296,3 +296,73 @@ func TestGmailFlow_allMailShowsArchivedAndMovesBackToInbox(t *testing.T) {
 		return slices.Contains(m.LabelIDs, "INBOX") && slices.Contains(m.LabelIDs, "STARRED")
 	})
 }
+
+// threadGets counts the threads.get requests sent to the fake.
+func threadGets(f *gmailtest.Fake) int {
+	n := 0
+	for _, r := range f.Requests() {
+		if r.Method == "GET" && strings.HasPrefix(r.Path, "/gmail/v1/users/me/threads/") {
+			n++
+		}
+	}
+	return n
+}
+
+// threeStoredConversations is a Gmail flow with three read conversations
+// in INBOX, every body downloaded, the mail list focused on the first.
+func threeStoredConversations(t *testing.T, rest time.Duration) *gmailFlow {
+	t.Helper()
+	h := newGmailFlow(t, func(f *gmailtest.Fake) {
+		for i, subj := range []string{"one", "two", "three"} {
+			f.AddMessage(gmailtest.Message{LabelIDs: []string{"INBOX"}, InternalDate: int64(1000 * (3 - i)),
+				Raw: []byte("From: bob@example.com\r\nSubject: " + subj + "\r\nMessage-ID: <" + subj + "@x>\r\n\r\nbody of " + subj + "\r\n")})
+		}
+	})
+	h.ra.convRest.Store(int64(rest))
+	h.eventually("INBOX listed, bodies stored", func() bool {
+		messages, bodies := h.st.Counts("flow")
+		return h.ra.currentFolder != nil && h.ra.currentFolder.Name == "INBOX" &&
+			h.ra.maillist.VisibleCount() == 3 && messages == 3 && bodies == 3
+	})
+	h.onUI(func() {
+		h.ra.uiApp.SetFocus(h.ra.maillist)
+		h.ra.maillist.Select(0, 0)
+	})
+	h.eventually("first conversation previewed", func() bool { return strings.Contains(h.ra.preview.GetText(true), "body of ") })
+	return h
+}
+
+// j and k through conversations whose bodies are stored show them from the
+// local copy at once, without asking Gmail: each threads.get costs quota,
+// and a queue of them made the preview lag behind the cursor.
+func TestGmailFlow_jkPreviewsFromTheLocalCopy(t *testing.T) {
+	h := threeStoredConversations(t, time.Hour) // never rests long enough to ask
+	before := threadGets(h.fake)
+	h.key('j')
+	h.key('j')
+	h.eventually("third conversation previewed", func() bool {
+		return strings.Contains(h.ra.preview.GetText(true), "body of three")
+	})
+	h.key('k')
+	h.eventually("second conversation previewed", func() bool {
+		return strings.Contains(h.ra.preview.GetText(true), "body of two")
+	})
+	if n := threadGets(h.fake) - before; n != 0 {
+		t.Errorf("%d threads.get requests while moving through stored conversations", n)
+	}
+}
+
+// Once the cursor rests, Gmail is asked once, for the row it rests on: a
+// message under a label m9s does not sync shows up then.
+func TestGmailFlow_restingAsksGmailOnceForThatRow(t *testing.T) {
+	h := threeStoredConversations(t, 100*time.Millisecond)
+	h.eventually("the first row's rest is over", func() bool { return threadGets(h.fake) >= 1 })
+	before := threadGets(h.fake)
+	h.key('j')
+	h.key('j')
+	h.eventually("third conversation asked for", func() bool { return threadGets(h.fake) > before })
+	time.Sleep(300 * time.Millisecond)
+	if n := threadGets(h.fake) - before; n != 1 {
+		t.Errorf("%d threads.get requests, want one for the row the cursor rests on", n)
+	}
+}

@@ -223,7 +223,7 @@ func newMinimalRootApp() *RootApp {
 	ra.logPagePanel = newLogPanel(ra.logView.TextView, ra.uiApp.Skin)
 	ra.sendFn = ra.sendDraft
 	ra.bodyLoader = func(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen bool) {
-		go ra.loadBody(acct, folder, env, markSeen, ra.conversationRowsOf(acct, folder))
+		go ra.loadBody(acct, folder, env, markSeen, ra.conversationRowsOf(acct, folder), ra.selGen.Load())
 	}
 	return ra
 }
@@ -306,7 +306,7 @@ func TestOnEnvelopeSelected(t *testing.T) {
 func TestLoadBody_nilCurrentFolder(t *testing.T) {
 	ra := newMinimalRootApp()
 	// currentFolder is nil → early return
-	ra.loadBody(ra.manager.Active(), nil, &mail.Envelope{ID: "1", UID: 1}, true, false)
+	ra.loadBody(ra.manager.Active(), nil, &mail.Envelope{ID: "1", UID: 1}, true, false, 0)
 }
 
 func TestSyncAll_nilActiveAccount(t *testing.T) {

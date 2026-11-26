@@ -681,6 +681,11 @@ If login says the client entry is not found, set that entry's URL to
 - Gmail **labels** are the folders. Open a label to list its conversations.
 - `enter` on a conversation opens it; `tab` / `shift-tab` move between its
   messages and `enter` expands or collapses one.
+- Moving through the list (`j` / `k`) previews each conversation from the
+  local copy, at once and without using quota, once its content is
+  downloaded. Gmail is asked for a conversation only when the cursor rests
+  on it (0.4 s): that brings in a message under a label m9s does not sync,
+  and content not downloaded yet (until then the preview shows the header).
 - `L` opens the label picker (Gmail labels; Outlook categories on a Microsoft account).
 - `/` filters the whole label as you type; `\` searches the server (Gmail
   search syntax such as `from:alice has:attachment`); `esc` returns to the
@@ -720,11 +725,13 @@ behind it.
   again (5 tries in all) before it reports the error and reconnects.
 - Searching (`/` then `enter`) and opening All Mail list 50 conversations,
   about 2,000–3,000 units: a third to a half of a minute's quota.
-- Moving to Trash (`d`) costs 20 units a conversation or message, whatever
-  its size: the local copy moves it to Trash without fetching it again, and
-  a label change Gmail reports for a stored message (from m9s or another
-  device) is applied without a fetch. 100 selected conversations take under
-  20 seconds; deleting for good in Trash costs 50 units per thousand.
+- Changing mail costs one call, whatever its size: moving to Trash (`d`) 20
+  units a conversation or message; archiving (`a`), starring (`*`), marking
+  unread (`u`) or read 10 a conversation, 5 a message. The local copy
+  changes without fetching anything again, and a label change Gmail reports
+  (from m9s or another device) is applied without a fetch. 100 selected
+  conversations go to Trash in under 20 seconds; deleting for good in Trash
+  costs 50 units per thousand.
 - If nothing shows and the Status row is not `● connected`, the reason is on
   the bottom row and in the log. Gmail's reason is in brackets, e.g.
   `gmail: http 403 PERMISSION_DENIED (insufficientPermissions)`: sign in again

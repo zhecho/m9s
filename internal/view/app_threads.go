@@ -3,6 +3,8 @@ package view
 import (
 	"context"
 	"fmt"
+	"slices"
+	"time"
 
 	"github.com/zhecho/m9s/internal/mail"
 	msync "github.com/zhecho/m9s/internal/sync"
@@ -32,6 +34,52 @@ func selfAddressOf(acct *mail.Account) string {
 	return acct.Config.SMTP.User
 }
 
+// defaultConvRest is how long the cursor rests on a conversation before
+// Gmail is asked for it: j and k through the list cost no quota.
+const defaultConvRest = 400 * time.Millisecond
+
+// loadConversation shows env's conversation. When the local copy holds
+// every body it is shown at once; Gmail is asked only once the cursor has
+// rested on the row (rested), for what the copy lacks — a body not
+// downloaded yet, or a message under a label m9s does not sync — and the
+// preview changes only if Gmail's conversation differs. Off the UI
+// goroutine.
+func (ra *RootApp) loadConversation(acct *mail.Account, folder *mail.Folder, eng msync.Account, th msync.Threads,
+	env *mail.Envelope, markSeen bool, gen int64) {
+	local := ra.storedConversation(acct.Name, env)
+	complete := len(local.missing) == 0
+	if complete {
+		local.offline = false
+		ra.uiApp.QueueUpdateDraw(func() { ra.conversationArrived(acct, folder, env, local) })
+	}
+	if markSeen { // the row shows read already, rested or not
+		go ra.markThreadRead(th, folder.Name, env)
+	}
+	if !ra.rested(gen) {
+		return
+	}
+	c := ra.fetchConversation(acct.Name, eng, env)
+	if complete && (c.offline || sameMessages(local, c)) {
+		return
+	}
+	ra.uiApp.QueueUpdateDraw(func() { ra.conversationArrived(acct, folder, env, c) })
+}
+
+// rested waits convRest and reports whether the selection is still gen.
+func (ra *RootApp) rested(gen int64) bool {
+	d := time.Duration(ra.convRest.Load())
+	if d <= 0 {
+		d = defaultConvRest
+	}
+	time.Sleep(d)
+	return ra.selGen.Load() == gen
+}
+
+// sameMessages reports whether a and b hold the same messages, in order.
+func sameMessages(a, b *conversation) bool {
+	return slices.EqualFunc(a.msgs, b.msgs, func(x, y *mail.Message) bool { return x.Envelope.ID == y.Envelope.ID })
+}
+
 // fetchConversation reads the whole conversation of a row from the server;
 // when that fails it falls back to the messages and bodies in the store.
 // Safe off the UI goroutine.
@@ -45,6 +93,13 @@ func (ra *RootApp) fetchConversation(account string, eng msync.Account, env *mai
 			ui.AppLog.Warn("[%s] conversation %s: %v", account, env.ThreadID, err)
 		}
 	}
+	return ra.storedConversation(account, env)
+}
+
+// storedConversation is env's conversation as the store holds it: a
+// placeholder (in missing) for a body never downloaded. It is marked
+// offline: Gmail may hold more.
+func (ra *RootApp) storedConversation(account string, env *mail.Envelope) *conversation {
 	var msgs []*mail.Message
 	missing := map[*mail.Message]bool{}
 	placeholder := func(e *mail.Envelope) *mail.Message {

@@ -117,6 +117,12 @@ type RootApp struct {
 	list     listState
 	bulkBusy bool          // a bulk action on the selection is running (UI goroutine)
 	bulkTick time.Duration // how often a running bulk action shows its progress; 0: every second
+	// selGen counts selection changes, so a body load off the UI goroutine
+	// can tell the cursor moved on. convRest (nanoseconds; 0: defaultConvRest)
+	// is how long the cursor must rest on a conversation before Gmail is
+	// asked for it.
+	selGen   atomic.Int64
+	convRest atomic.Int64
 	// logPagePanel draws the log page, under its filter.
 	logPagePanel *logPanel
 	// The log pane at the bottom of the main screen (ui.log_pane): its
@@ -177,7 +183,8 @@ func NewRootApp(uiApp *ui.App, cfg *config.Config, manager *mail.Manager,
 	}
 	ra.openBrowser = openInDefaultBrowser
 	ra.bodyLoader = func(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen bool) {
-		go ra.loadBody(acct, folder, env, markSeen, ra.conversationRowsOf(acct, folder))
+		conv, gen := ra.conversationRowsOf(acct, folder), ra.selGen.Load()
+		go ra.loadBody(acct, folder, env, markSeen, conv, gen)
 	}
 
 	ra.hoverDelay = folderHoverDelay
@@ -1172,6 +1179,7 @@ func (ra *RootApp) isCurrent(acct *mail.Account, f *mail.Folder) bool {
 }
 
 func (ra *RootApp) onEnvelopeSelected(env *mail.Envelope) {
+	ra.selGen.Add(1)
 	ra.selectedEnv = env
 	ra.currentMsg = nil // until the body for env arrives
 	ra.conv = nil
@@ -1219,8 +1227,8 @@ func (ra *RootApp) conversationRowsOf(acct *mail.Account, folder *mail.Folder) b
 // loadBody fetches env's body from folder and shows it in the preview. The
 // message is marked as read on the server only when markSeen is set. conv
 // says the row is a conversation, decided on the UI goroutine, as loadBody
-// runs off it.
-func (ra *RootApp) loadBody(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen, conv bool) {
+// runs off it; gen is the selection it was asked for (selGen).
+func (ra *RootApp) loadBody(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen, conv bool, gen int64) {
 	if acct == nil || folder == nil {
 		return
 	}
@@ -1229,11 +1237,7 @@ func (ra *RootApp) loadBody(acct *mail.Account, folder *mail.Folder, env *mail.E
 		return
 	}
 	if th, ok := eng.(msync.Threads); ok && conv && env.ThreadID != "" {
-		c := ra.fetchConversation(acct.Name, eng, env)
-		ra.uiApp.QueueUpdateDraw(func() { ra.conversationArrived(acct, folder, env, c) })
-		if markSeen {
-			ra.markThreadRead(th, folder.Name, env)
-		}
+		ra.loadConversation(acct, folder, eng, th, env, markSeen, gen)
 		return
 	}
 	msg, err := eng.FetchBody(context.Background(), folder.Name, env.ID)

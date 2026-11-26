@@ -110,6 +110,10 @@ func (e *GmailEngine) ModifyThread(ctx context.Context, threadID string, add, re
 		return err
 	}
 	e.patchAllMail(threadID, on, off)
+	if e.labelledLocally(e.store.ThreadEnvelopes(e.cfg.Name, threadID), on, off) {
+		kick(e.pollKick)
+		return nil
+	}
 	e.refreshThread(ctx, threadID)
 	return nil
 }

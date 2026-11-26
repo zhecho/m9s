@@ -222,8 +222,18 @@ func (e *GmailEngine) SetFlags(ctx context.Context, _ string, id string, flags [
 	if len(on)+len(off) == 0 {
 		return nil
 	}
+	return e.modify(ctx, id, on, off)
+}
+
+// modify changes the labels of message id, then its local rows without a
+// fetch when it is stored.
+func (e *GmailEngine) modify(ctx context.Context, id string, on, off []string) error {
 	if err := e.api.Modify(ctx, id, on, off); err != nil {
 		return err
+	}
+	if env, ok := e.store.EnvelopesByID(e.cfg.Name, []string{id})[id]; ok && e.labelledLocally([]*mail.Envelope{env}, on, off) {
+		kick(e.pollKick)
+		return nil
 	}
 	e.refreshMessage(ctx, id)
 	return nil
@@ -483,9 +493,5 @@ func (e *GmailEngine) ModifyLabels(ctx context.Context, _ string, id string, add
 	if len(on)+len(off) == 0 {
 		return nil
 	}
-	if err := e.api.Modify(ctx, id, on, off); err != nil {
-		return err
-	}
-	e.refreshMessage(ctx, id)
-	return nil
+	return e.modify(ctx, id, on, off)
 }

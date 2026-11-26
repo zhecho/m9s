@@ -1003,3 +1003,48 @@ func TestGmailEngine_TrashMovesRowsWithoutFetching(t *testing.T) {
 		t.Errorf("Trash after the poll = %v", got)
 	}
 }
+
+// Archive, star, unread and mark-as-read change the local rows at once
+// with no fetch: the labels added and removed say where a message goes.
+func TestGmailEngine_LabelChangesApplyWithoutFetching(t *testing.T) {
+	var a, b, c string
+	h := newGmail(t, func(f *gmailtest.Fake) {
+		a = f.AddMessage(gmailtest.Message{LabelIDs: []string{"INBOX", "UNREAD"}, Raw: gRaw("a", "a@x")})
+		b = f.AddMessage(gmailtest.Message{ThreadID: "T2", LabelIDs: []string{"INBOX"}, Raw: gRaw("b", "b@x")})
+		c = f.AddMessage(gmailtest.Message{ThreadID: "T2", LabelIDs: []string{"INBOX", "UNREAD"}, Raw: gRaw("c", "c@x")})
+	})
+	h.synced()
+	fetches := func() int { return metadataFetches(h.f, a) + metadataFetches(h.f, b) + metadataFetches(h.f, c) }
+	before := fetches()
+	ctx := context.Background()
+
+	if err := h.eng.SetFlags(ctx, "INBOX", a, []string{`\Seen`}, true); err != nil {
+		t.Fatal(err)
+	}
+	if env := h.env("INBOX", a); env == nil || env.IsUnread() {
+		t.Fatalf("a = %+v, want it read", env)
+	}
+	if err := h.eng.ModifyLabels(ctx, "INBOX", a, []string{"Work"}, []string{"INBOX"}); err != nil {
+		t.Fatal(err)
+	}
+	if env := h.env("Work", a); env == nil || env.IsUnread() || slices.Contains(h.ids("INBOX"), a) {
+		t.Fatalf("a not moved to Work, read: Work %+v, INBOX %v", env, h.ids("INBOX"))
+	}
+	if err := h.eng.ModifyThread(ctx, "T2", []string{`\Flagged`, `\Seen`}, []string{"INBOX"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.ids("INBOX")) != 0 {
+		t.Fatalf("INBOX = %v after archiving the conversation", h.ids("INBOX"))
+	}
+	for _, id := range []string{b, c} {
+		envs := h.st.EnvelopesByID(gAcct, []string{id})
+		if env := envs[id]; env != nil && (!env.IsFlagged() || env.IsUnread()) {
+			t.Errorf("%s = %+v, want starred and read", id, env)
+		}
+	}
+	cursor := h.st.Cursor(gAcct)
+	h.eventually("poll applied the changes", func() bool { return h.st.Cursor(gAcct) != cursor })
+	if n := fetches() - before; n != 0 {
+		t.Errorf("%d metadata fetches for label changes", n)
+	}
+}
