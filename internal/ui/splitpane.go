@@ -9,6 +9,9 @@ const (
 	splitBorders   = 2 // a bordered pane spends a line above and below its content
 	splitMinBottom = 3 // the bottom pane never shrinks below a border and one line
 	splitMinTopRow = 1
+	// splitMinTopArea is what the top keeps when the bottom pane is the
+	// sized one (the log pane): the mail panes above stay usable.
+	splitMinTopArea = 10
 )
 
 // SplitPane stacks two bordered panes. The top one shows TopRows lines of
@@ -18,15 +21,34 @@ type SplitPane struct {
 	*tview.Box
 	top, bottom tview.Primitive
 	topRows     int
-	dragging    bool
-	grabOffset  int // 0: grabbed the top pane's bottom border, 1: the bottom pane's top border
-	onResize    func(rows int)
+	// sizeBottom: the bottom pane is the one with a size (bottomRows lines),
+	// the top gets the rest — the log pane under the mail area.
+	sizeBottom bool
+	bottomRows int
+	dragging   bool
+	moved      bool // the pointer moved since the border was grabbed
+	grabOffset int  // 0: grabbed the top pane's bottom border, 1: the bottom pane's top border
+	onResize   func(rows int)
 }
 
 // NewSplitPane creates a split whose top pane shows topRows lines.
 func NewSplitPane(top, bottom tview.Primitive, topRows int) *SplitPane {
 	return &SplitPane{Box: tview.NewBox(), top: top, bottom: bottom, topRows: max(topRows, splitMinTopRow)}
 }
+
+// NewSplitPaneBottom creates a split whose bottom pane shows bottomRows
+// lines and whose top pane gets the rest, keeping at least 10 lines.
+func NewSplitPaneBottom(top, bottom tview.Primitive, bottomRows int) *SplitPane {
+	return &SplitPane{Box: tview.NewBox(), top: top, bottom: bottom, topRows: splitMinTopRow,
+		sizeBottom: true, bottomRows: max(bottomRows, splitMinTopRow)}
+}
+
+// BottomRows returns how many content lines a bottom-sized split's bottom
+// pane is meant to show.
+func (s *SplitPane) BottomRows() int { return s.bottomRows }
+
+// SetBottomRows changes how many content lines the bottom pane shows.
+func (s *SplitPane) SetBottomRows(rows int) { s.bottomRows = max(rows, splitMinTopRow) }
 
 // Dragging reports whether the border is being dragged right now.
 func (s *SplitPane) Dragging() bool { return s.dragging }
@@ -44,6 +66,13 @@ func (s *SplitPane) SetTopRows(rows int) { s.topRows = max(rows, splitMinTopRow)
 // limited so the bottom pane keeps its minimum. The wanted size itself is
 // kept, so a larger window gets it back.
 func (s *SplitPane) topHeight(h int) int {
+	h = max(h, 0)
+	if s.sizeBottom {
+		if h < splitMinTopArea+splitMinBottom {
+			return max(h-splitMinBottom, 0) // the log still gives way first
+		}
+		return h - max(min(s.bottomRows+splitBorders, h-splitMinTopArea), splitMinBottom)
+	}
 	want := s.topRows + splitBorders
 	limit := h - splitMinBottom
 	if limit < splitBorders+splitMinTopRow {
@@ -95,13 +124,21 @@ func (s *SplitPane) MouseHandler() func(action tview.MouseAction, event *tcell.E
 		if s.dragging {
 			switch action {
 			case tview.MouseMove:
+				s.moved = true
 				s.dragTo(y-ry-s.grabOffset, h)
 				return true, s
 			case tview.MouseLeftUp:
-				s.dragTo(y-ry-s.grabOffset, h)
 				s.dragging = false
+				if !s.moved { // a click on the border: nothing changes, nothing is saved
+					return true, nil
+				}
+				s.dragTo(y-ry-s.grabOffset, h)
 				if s.onResize != nil {
-					s.onResize(s.topRows)
+					if s.sizeBottom {
+						s.onResize(s.bottomRows)
+					} else {
+						s.onResize(s.topRows)
+					}
 				}
 				return true, nil
 			}
@@ -110,7 +147,7 @@ func (s *SplitPane) MouseHandler() func(action tview.MouseAction, event *tcell.E
 
 		onBorder := x >= rx && x < rx+w && (y == border-1 || y == border)
 		if action == tview.MouseLeftDown && onBorder {
-			s.dragging = true
+			s.dragging, s.moved = true, false
 			s.grabOffset = y - (border - 1)
 			return true, s
 		}
@@ -129,6 +166,11 @@ func (s *SplitPane) MouseHandler() func(action tview.MouseAction, event *tcell.E
 // dragTo puts the border at offset line within a pane of height h: the top
 // pane's bottom border follows the pointer.
 func (s *SplitPane) dragTo(line, h int) {
+	if s.sizeBottom {
+		topH := min(max(line+1, splitMinTopArea), h-splitMinBottom)
+		s.bottomRows = max(h-topH-splitBorders, splitMinTopRow)
+		return
+	}
 	topH := line + 1
 	topH = max(topH, splitBorders+splitMinTopRow)
 	topH = min(topH, h-splitMinBottom)

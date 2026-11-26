@@ -30,8 +30,17 @@ func newWiredRootApp(t *testing.T, accountNames ...string) *RootApp {
 			IMAP: config.IMAPConfig{User: name + "@x.io"},
 		}})
 	}
-	return NewRootApp(uiApp, &config.Config{}, mail.NewManager(accounts),
+	return NewRootApp(uiApp, noLogPane(), mail.NewManager(accounts),
 		map[string]msync.Account{}, nil, make(chan msync.Event))
+}
+
+// noLogPane is a config without the log pane: the tests of the other panes
+// lay out the screen as before it existed (logpane_test.go tests the pane).
+func noLogPane() *config.Config {
+	off := false
+	cfg := &config.Config{}
+	cfg.UI.LogPane = &off
+	return cfg
 }
 
 func testFolders(names ...string) []*mail.Folder {
@@ -588,7 +597,7 @@ func TestLogView_wrapKeepsBrackets(t *testing.T) {
 	ra := newWiredRootApp(t, "test")
 	msg := `[my-account] [delete] "[PATCH v2] fix" dial tcp [::1]:993 [a.b.c] [AUTH] refused`
 	ui.AppLog.Error("%s", msg)
-	renderLog(ra.logView, ra.uiApp.Skin)
+	renderLog(ra.logView.TextView, ra.uiApp.Skin)
 	squash := func(s string) string { return strings.Join(strings.Fields(s), "") }
 	for w := 30; w <= 110; w++ {
 		screen := tcell.NewSimulationScreen("UTF-8")

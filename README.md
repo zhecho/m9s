@@ -90,7 +90,10 @@ RSRV:     Dovecot / -         <S>   Sync                      <o> Open
 │  Drafts             ├─ PREVIEW ──────────────────────────────────────────────────────────────┤
 │  Trash              │ From: Alice <alice@example.com>                                        │
 │  Local Drafts       │ Can we move the meeting to 3pm?                                        │
-└─────────────────────┴────────────────────────────────────────────────────────────────────────┘
+├─────────────────────┴─────────────────────────── LOG ────────────────────────────────────────┤
+│ 2026-11-26 09:24:20 INFO  [personal] Connected                                               │
+│ 2026-11-26 09:24:23 INFO  [personal] Sync complete                                           │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
  <personal>  <INBOX>                                                              Sync complete
 ```
 
@@ -128,6 +131,21 @@ RSRV:     Dovecot / -         <S>   Sync                      <o> Open
   preview up or down with the mouse. The size you leave is remembered in
   `~/.local/state/m9s/layout.json` and used next time; `ui.mail_list_rows`
   (default 10) is the size before you ever drag.
+- **Log pane** (bottom, full width; 12 lines by default) — the log as it
+  happens, the same lines as the log page (`l`, which still opens the
+  full-screen log), newest at the bottom. It follows new lines while scrolled
+  to the end; scroll up to read and it stays put; back at the end (`j`, `G`)
+  it follows again. `tab` reaches it after the preview, or click it; there
+  `j`/`k`, `g`/`G` and the arrows scroll, `/` filters it as on the log page
+  (the title then reads `LOG — /text (shown of total)`), and `esc` clears
+  the filter, then leaves it for the folders. Message keys (`d`, `r`, …) do
+  nothing there.
+- **Resizing the log pane** — drag its top border with the mouse. The size
+  is remembered in `layout.json` next to the mail list's; `ui.log_pane_rows`
+  (default 12) is the size before you drag. A short terminal shrinks the log
+  first (down to one line; the panes above keep at least 10 lines when there
+  is room). `ui.log_pane: false` hides the pane; the log page (`l`) is there
+  either way.
 - **Selecting text** — drag with the left mouse button to select text inside
   one pane; when you let go it is copied to the clipboard (`Copied N
   characters` on the bottom row). A click without dragging works as before.
@@ -177,9 +195,9 @@ attempt is written to the log (`l`).
 
 ### The log, and one m9s at a time
 
-The log (`l`) is kept in `~/.local/state/m9s/m9s.log` (under
-`$XDG_STATE_HOME/m9s/` when set), private to you, and appended to as things
-happen. When m9s starts, the log view begins with the last 2,000 lines of
+The log (`l`, and the log pane at the bottom of the screen) is kept in
+`~/.local/state/m9s/m9s.log` (under `$XDG_STATE_HOME/m9s/` when set), private
+to you, and appended to as things happen. When m9s starts, the log view begins with the last 2,000 lines of
 earlier runs, then a line marking this one:
 `── m9s v1.2.0 started (pid 1234) ──`. The file reads as plain text
 (`less`, `grep`): `2026-11-26 09:24:23 ERROR [work] connection failed …`. Past
@@ -324,6 +342,8 @@ ui:
   editor: $EDITOR             # editor command for composing mail; falls back to $EDITOR env var
   date_format: "Jan 02 15:04" # Go time format string
   mail_list_rows: 10          # messages visible in the mail list; the preview gets the rest (default: 10)
+  log_pane: true              # the log as a pane at the bottom of the screen (default: true)
+  log_pane_rows: 12           # its height in lines; dragging its border overrides it (default: 12)
   attachment_dir: ~/Downloads # where s saves attachments without asking (default: ask each time)
 ```
 
@@ -872,7 +892,7 @@ These work from every pane:
 |-----|--------|
 | `j` / `k` | Navigate down / up in the focused pane |
 | `g` / `G` | Jump to the top / bottom of the focused pane |
-| `tab` | Cycle focus between panes |
+| `tab` | Cycle focus between panes: folders, mail list, preview, log pane (when shown) |
 | `[` / `]` | Switch to previous / next account |
 | `:` | Command prompt: switch to an account or folder by name; `:help` lists every shortcut |
 | `/` | Filter the whole folder, in the local copy (see [`/` filter](#-filter)) |

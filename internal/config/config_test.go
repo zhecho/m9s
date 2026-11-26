@@ -382,3 +382,31 @@ func TestLoad_browserThemes(t *testing.T) {
 		t.Errorf("browser = %+v", cfg.UI.Browser)
 	}
 }
+
+func TestUIConfig_logPaneDefaults(t *testing.T) {
+	cfg, err := config.LoadFromBytes([]byte("ui:\n  theme: dracula\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.UI.LogPaneOn() || cfg.UI.LogPaneHeight() != 12 {
+		t.Errorf("defaults: on %v, rows %d; want true, 12", cfg.UI.LogPaneOn(), cfg.UI.LogPaneHeight())
+	}
+	cfg, _ = config.LoadFromBytes([]byte("ui:\n  log_pane: false\n  log_pane_rows: 6\n"))
+	if cfg.UI.LogPaneOn() || cfg.UI.LogPaneHeight() != 6 {
+		t.Errorf("set: on %v, rows %d; want false, 6", cfg.UI.LogPaneOn(), cfg.UI.LogPaneHeight())
+	}
+}
+
+// Saving one dragged size keeps the other.
+func TestUpdateLayoutState_keepsTheOther(t *testing.T) {
+	path := t.TempDir() + "/layout.json"
+	if err := config.UpdateLayoutState(path, func(st *config.LayoutState) { st.MailListRows = 8 }); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.UpdateLayoutState(path, func(st *config.LayoutState) { st.LogPaneRows = 5 }); err != nil {
+		t.Fatal(err)
+	}
+	if st := config.LoadLayoutState(path); st.MailListRows != 8 || st.LogPaneRows != 5 {
+		t.Errorf("state = %+v, want both kept", st)
+	}
+}

@@ -38,7 +38,7 @@ func renderLogFiltered(tv *tview.TextView, skin *ui.Skin, filter string) (shown,
 	entries := ui.AppLog.Entries()
 	for _, e := range entries {
 		if match(logLine(e)) {
-			fmt.Fprintln(tv, ui.FormatEntry(e, skin))
+			writeLogLine(tv, ui.FormatEntry(e, skin), shown == 0)
 			shown++
 		}
 	}
@@ -46,48 +46,44 @@ func renderLogFiltered(tv *tview.TextView, skin *ui.Skin, filter string) (shown,
 	return shown, len(entries)
 }
 
+// writeLogLine adds one line to tv. The break goes before a line, not
+// after it, so the view does not end in an empty line that scrolling to
+// the end would show.
+func writeLogLine(tv *tview.TextView, line string, first bool) {
+	if !first {
+		fmt.Fprint(tv, "\n")
+	}
+	fmt.Fprint(tv, line)
+}
+
 // renderLogView redraws the log page with its filter and names the filter
 // in the title. UI goroutine only.
 func (ra *RootApp) renderLogView() {
-	shown, total := renderLogFiltered(ra.logView, ra.uiApp.Skin, ra.logFilter)
-	ra.logRendered, ra.logShown, ra.logRenderedFilter = total, shown, ra.logFilter
+	ra.logPagePanel.render()
 	ra.setLogTitle()
 }
 
-// appendLogView adds the entries logged since the log page was last drawn,
-// those that match its filter; a changed filter or a shorter log redraws it
-// all. UI goroutine only.
+// appendLogView adds the entries logged since the log page was last drawn.
+// UI goroutine only.
 func (ra *RootApp) appendLogView() {
-	entries := ui.AppLog.Entries()
-	if ra.logFilter != ra.logRenderedFilter || len(entries) < ra.logRendered {
-		ra.renderLogView()
-		return
-	}
-	match := logMatcher(ra.logFilter)
-	for _, e := range entries[ra.logRendered:] {
-		if match(logLine(e)) {
-			fmt.Fprintln(ra.logView, ui.FormatEntry(e, ra.uiApp.Skin))
-			ra.logShown++
-		}
-	}
-	ra.logRendered = len(entries)
-	ra.logView.ScrollToEnd()
+	ra.logPagePanel.appendNew()
 	ra.setLogTitle()
 }
 
 // setLogTitle names the log page's filter, and how many lines it shows.
 func (ra *RootApp) setLogTitle() {
-	if ra.logFilter == "" {
+	filter, shown, total := ra.logPagePanel.counts()
+	if filter == "" {
 		ra.logView.SetTitle(logTitle)
 		return
 	}
-	ra.logView.SetTitle(fmt.Sprintf(" LOGS — /%s (%d of %d) — esc clears, q to close ", tview.Escape(ra.logFilter), ra.logShown, ra.logRendered))
+	ra.logView.SetTitle(fmt.Sprintf(" LOGS — /%s (%d of %d) — esc clears, q to close ", tview.Escape(filter), shown, total))
 }
 
 // setLogFilter shows only the log lines with text ("" shows them all).
 func (ra *RootApp) setLogFilter(text string) {
-	ra.logFilter = text
-	ra.renderLogView()
+	ra.logPagePanel.setFilter(text)
+	ra.setLogTitle()
 }
 
 // startLogFilter opens the / prompt row at the top of the log page: the

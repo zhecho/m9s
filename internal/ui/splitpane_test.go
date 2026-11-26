@@ -156,3 +156,76 @@ func TestSplitPane_keysReachTheFocusedPane(t *testing.T) {
 		t.Errorf("top got %q, bottom got %q; each key must reach the focused pane", string(top.keys), string(bottom.keys))
 	}
 }
+
+// newBottomSplit lays out a 40×h split whose bottom pane shows rows lines.
+func newBottomSplit(rows, h int) (*ui.SplitPane, *mouseRecorder, *mouseRecorder, *[]int) {
+	top := &mouseRecorder{Box: tview.NewBox().SetBorder(true)}
+	bottom := &mouseRecorder{Box: tview.NewBox().SetBorder(true)}
+	var resized []int
+	sp := ui.NewSplitPaneBottom(top, bottom, rows)
+	sp.SetOnResize(func(n int) { resized = append(resized, n) })
+	sp.SetRect(0, 0, 40, h)
+	drawPrimitive(sp, 40, h)
+	return sp, top, bottom, &resized
+}
+
+// The log pane: the bottom shows its rows, the top gets the rest.
+func TestSplitPaneBottom_sizesTheBottom(t *testing.T) {
+	_, top, bottom, _ := newBottomSplit(12, 40)
+	if _, _, _, bh := bottom.GetRect(); bh != 14 {
+		t.Errorf("bottom h=%d, want 14 (12 rows + 2 border lines)", bh)
+	}
+	if _, _, _, th := top.GetRect(); th != 26 {
+		t.Errorf("top h=%d, want 26", th)
+	}
+}
+
+// On a short terminal the bottom gives way: the top keeps 10 lines.
+func TestSplitPaneBottom_topKeepsTen(t *testing.T) {
+	_, top, bottom, _ := newBottomSplit(12, 20)
+	_, _, _, th := top.GetRect()
+	_, _, _, bh := bottom.GetRect()
+	if th != 10 || bh != 10 {
+		t.Errorf("top h=%d bottom h=%d, want 10 and 10", th, bh)
+	}
+}
+
+// Dragging the border up makes the bottom taller, and reports its rows.
+func TestSplitPaneBottom_dragReportsBottomRows(t *testing.T) {
+	sp, _, _, resized := newBottomSplit(12, 40)
+	border := 26 // the bottom pane's top line
+	mouse(sp, tview.MouseLeftDown, border)
+	mouse(sp, tview.MouseMove, border-3)
+	mouse(sp, tview.MouseLeftUp, border-3)
+	if len(*resized) != 1 || (*resized)[0] != 15 || sp.BottomRows() != 15 {
+		t.Errorf("resized %v, BottomRows %d; want 15", *resized, sp.BottomRows())
+	}
+}
+
+// On a very short space the log still gives way first: it keeps 3 lines
+// (border and one line) and the top gets the rest; no size goes negative.
+func TestSplitPaneBottom_tinySpace(t *testing.T) {
+	_, top, bottom, _ := newBottomSplit(12, 11)
+	_, _, _, th := top.GetRect()
+	_, _, _, bh := bottom.GetRect()
+	if th != 8 || bh != 3 {
+		t.Errorf("11 lines: top %d bottom %d, want 8 and 3", th, bh)
+	}
+	_, top, bottom, _ = newBottomSplit(12, 2)
+	_, _, _, th = top.GetRect()
+	_, _, _, bh = bottom.GetRect()
+	if th < 0 || bh < 0 || th+bh != 2 {
+		t.Errorf("2 lines: top %d bottom %d", th, bh)
+	}
+}
+
+// A click on the border that does not move changes nothing and saves
+// nothing.
+func TestSplitPane_clickOnBorderSavesNothing(t *testing.T) {
+	sp, _, _, resized := newBottomSplit(12, 40)
+	mouse(sp, tview.MouseLeftDown, 26)
+	mouse(sp, tview.MouseLeftUp, 26)
+	if len(*resized) != 0 || sp.BottomRows() != 12 {
+		t.Errorf("resized %v, rows %d; want nothing", *resized, sp.BottomRows())
+	}
+}

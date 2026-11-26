@@ -9,6 +9,7 @@ const (
 	paneFolders paneKind = iota
 	paneMailList
 	panePreview
+	paneLog
 )
 
 // generalHints are the keys that work from every pane. Labels of rebindable
@@ -45,6 +46,9 @@ func generalHints(km ui.KeyMap) []ui.KeyHint {
 // canEdit adds <e> Edit: on a local draft, or in the server's Drafts folder.
 func paneHints(km ui.KeyMap, pane paneKind, canEdit bool) []ui.KeyHint {
 	var hints []ui.KeyHint
+	if pane == paneLog {
+		return []ui.KeyHint{{Key: "esc", Desc: "Clear filter / leave"}} // j/k and / are among the general keys
+	}
 	if pane == paneFolders {
 		hints = []ui.KeyHint{{Key: "enter", Desc: "Open"}}
 		if canEdit {

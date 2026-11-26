@@ -220,6 +220,7 @@ func newMinimalRootApp() *RootApp {
 	ra.maillist = NewMailListView(uiApp.Skin, "", nil)
 	ra.preview = NewPreviewView(uiApp.Skin)
 	ra.logView = ra.buildLogView()
+	ra.logPagePanel = newLogPanel(ra.logView.TextView, ra.uiApp.Skin)
 	ra.sendFn = ra.sendDraft
 	ra.bodyLoader = func(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen bool) {
 		go ra.loadBody(acct, folder, env, markSeen, ra.conversationRowsOf(acct, folder))

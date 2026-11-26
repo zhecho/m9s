@@ -70,9 +70,8 @@ type RootApp struct {
 	maillist   *MailListView
 	preview    *PreviewView
 	reader     *ReaderView
-	logView    *tview.TextView
+	logView    *logPaneView
 	logPage    *tview.Flex // the log page: the / prompt row on demand, then logView
-	logFilter  string      // the log page shows only lines with this text
 	help       *HelpView
 	helpReturn tview.Primitive // focus to give back when help closes
 	logReturn  tview.Primitive // focus to give back when the log closes
@@ -117,17 +116,20 @@ type RootApp struct {
 	// delays the filter's folder search while typing (tests: at once).
 	list     listState
 	bulkBusy bool // a bulk action on the selection is running (UI goroutine)
-	// The log page shows logRendered entries of the log under the filter
-	// logRenderedFilter, logShown of them matching; a refresh adds the rest.
-	logRendered       int
-	logShown          int
-	logRenderedFilter string
-	logRefreshQueued  atomic.Bool
-	logDeliver        func(func()) // tests: where log redraws are queued
-	searching         bool         // a server search is on its way (UI goroutine)
-	debounce          func(time.Duration, func())
-	searchSeq         int // identifies the latest search asked for
-	bodyLoader        func(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen bool)
+	// logPagePanel draws the log page, under its filter.
+	logPagePanel *logPanel
+	// The log pane at the bottom of the main screen (ui.log_pane): its
+	// view and panel, and the split that sizes it under the mail area. All
+	// nil when it is off.
+	logPane          *logPaneView
+	logPanePanel     *logPanel
+	outer            *ui.SplitPane
+	logRefreshQueued atomic.Bool
+	logDeliver       func(func()) // tests: where log redraws are queued
+	searching        bool         // a server search is on its way (UI goroutine)
+	debounce         func(time.Duration, func())
+	searchSeq        int // identifies the latest search asked for
+	bodyLoader       func(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen bool)
 
 	// browser holds the pages handed to the web browser; openBrowser shows
 	// one (tests replace it). browserPending is the message the user asked to
@@ -187,6 +189,7 @@ func NewRootApp(uiApp *ui.App, cfg *config.Config, manager *mail.Manager,
 	ra.preview = NewPreviewView(uiApp.Skin)
 	ra.reader = NewReaderView(uiApp.Skin, ra.closeReader)
 	ra.logView = ra.buildLogView()
+	ra.logPagePanel = newLogPanel(ra.logView.TextView, uiApp.Skin)
 	ra.help = NewHelpView(uiApp.Skin, ra.closeHelp)
 	ra.editFile = ra.editInTerminal
 
@@ -205,10 +208,21 @@ func NewRootApp(uiApp *ui.App, cfg *config.Config, manager *mail.Manager,
 		AddItem(ra.folders, 22, 0, true).
 		AddItem(rightPane, 0, 1, false)
 
+	// The log pane under the mail area, log_pane_rows high; its border can
+	// be dragged too.
+	var body tview.Primitive = mainArea
+	if cfg.UI.LogPaneOn() {
+		ra.logPane = ra.newLogPaneView()
+		ra.logPanePanel = newLogPanel(ra.logPane.TextView, uiApp.Skin)
+		ra.logPanePanel.render()
+		ra.outer = ui.NewSplitPaneBottom(mainArea, ra.logPane, cfg.UI.LogPaneHeight())
+		body = ra.outer
+	}
+
 	ra.prompt = ui.NewPrompt(uiApp.Skin)
 	root := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(uiApp.Header, ui.HeaderHeight, 0, false).
-		AddItem(mainArea, 0, 1, true).
+		AddItem(body, 0, 1, true).
 		AddItem(uiApp.StatusBar, 1, 0, false)
 	ra.root = root
 
@@ -251,8 +265,12 @@ func (ra *RootApp) wireSelection() {
 		Regions: func() []ui.Rect {
 			switch page, _ := ra.uiApp.Pages.GetFrontPage(); page {
 			case pageMain:
-				return []ui.Rect{inner(ra.folders), inner(ra.maillist), inner(ra.preview),
+				rects := []ui.Rect{inner(ra.folders), inner(ra.maillist), inner(ra.preview),
 					inner(ra.uiApp.Header), inner(ra.uiApp.StatusBar)}
+				if ra.logPane != nil {
+					rects = append(rects, inner(ra.logPane))
+				}
+				return rects
 			case pageReader:
 				return []ui.Rect{inner(ra.reader)}
 			case pageLog:
@@ -262,7 +280,9 @@ func (ra *RootApp) wireSelection() {
 			}
 			return nil // a dialog: the whole screen
 		},
-		Busy: ra.split.Dragging,
+		// A border being dragged is not a text selection: the mail list's,
+		// or the log pane's.
+		Busy: func() bool { return ra.split.Dragging() || (ra.outer != nil && ra.outer.Dragging()) },
 	}
 	sel.OnCopied = func(text string, err error) {
 		if err != nil {
@@ -643,6 +663,21 @@ func (ra *RootApp) wireKeys() {
 			}
 			return event
 		}
+		// The log pane takes its own keys (scrolling, Esc) and / for its
+		// filter; of the rest only the keys meant for the whole screen work
+		// there, so a message key never acts from the log.
+		if ra.logPaneFocused() {
+			switch ra.uiApp.KeyMap.Lookup(event) {
+			case ui.ActionSearchLocal:
+				ra.startLogPaneFilter()
+				return nil
+			case ui.ActionTabCycle, ui.ActionLog, ui.ActionCommandBar, ui.ActionHelp, ui.ActionBack, ui.ActionSync,
+				ui.ActionSwitchAccountNext, ui.ActionSwitchAccountPrev, ui.ActionCompose, ui.ActionSearchServer:
+				// handled below, as anywhere
+			default:
+				return event
+			}
+		}
 		// Esc in the mail list unmarks, leaves a search, or drops an active
 		// filter, in that order.
 		if event.Key() == tcell.KeyEscape && ra.mailListFocused() && len(ra.maillist.Marked()) > 0 {
@@ -841,6 +876,12 @@ func (ra *RootApp) cycleFocus() {
 		ra.uiApp.SetFocus(ra.maillist)
 	case ra.maillist:
 		ra.uiApp.SetFocus(ra.preview)
+	case ra.preview:
+		if ra.logPane != nil {
+			ra.uiApp.SetFocus(ra.logPane)
+			return
+		}
+		ra.uiApp.SetFocus(ra.folders)
 	default:
 		ra.uiApp.SetFocus(ra.folders)
 	}
@@ -851,7 +892,7 @@ func (ra *RootApp) closeReader() {
 	ra.uiApp.SetFocus(ra.maillist)
 }
 
-func (ra *RootApp) buildLogView() *tview.TextView {
+func (ra *RootApp) buildLogView() *logPaneView {
 	tv := tview.NewTextView()
 	tv.SetBorder(true)
 	tv.SetTitle(logTitle)
@@ -876,10 +917,14 @@ func (ra *RootApp) buildLogView() *tview.TextView {
 		}
 		go deliver(func() {
 			ra.logRefreshQueued.Store(false)
-			if ra.logView == tv {
+			if ra.logView != nil && ra.logView.TextView == tv {
 				ra.appendLogView()
 			} else {
 				renderLog(tv, ra.uiApp.Skin)
+			}
+			if ra.logPanePanel != nil {
+				ra.logPanePanel.appendNew()
+				ra.setLogPaneTitle()
 			}
 		})
 	}
@@ -887,7 +932,7 @@ func (ra *RootApp) buildLogView() *tview.TextView {
 
 	// Esc clears a filter first, then closes; q closes.
 	tv.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape && ra.logFilter != "" {
+		if event.Key() == tcell.KeyEscape && ra.logPagePanel.filter != "" {
 			ra.setLogFilter("")
 			return nil
 		}
@@ -898,7 +943,7 @@ func (ra *RootApp) buildLogView() *tview.TextView {
 		}
 		return event
 	})
-	return tv
+	return newLogView(tv)
 }
 
 // renderLog redraws tv with every log entry, newest last. UI goroutine only.
@@ -919,7 +964,7 @@ func (ra *RootApp) toggleLog() {
 // opens again without a filter.
 func (ra *RootApp) closeLog() {
 	ra.closePrompt(ra.logView)
-	ra.logFilter = ""
+	ra.logPagePanel.filter = ""
 	ra.uiApp.Pages.SwitchToPage(pageMain)
 	focus := ra.logReturn
 	if focus == nil || focus == tview.Primitive(ra.logView) {
@@ -2235,14 +2280,22 @@ func (ra *RootApp) SetBrowserThemes(t ui.BrowserThemes) {
 // remembers future changes there.
 func (ra *RootApp) SetLayoutStatePath(path string) {
 	ra.layoutPath = path
-	if st := config.LoadLayoutState(path); st.MailListRows > 0 {
+	st := config.LoadLayoutState(path)
+	if st.MailListRows > 0 {
 		ra.split.SetTopRows(st.MailListRows)
 	}
-	ra.split.SetOnResize(func(rows int) {
-		if err := config.SaveLayoutState(ra.layoutPath, config.LayoutState{MailListRows: rows}); err != nil {
+	save := func(change func(*config.LayoutState)) {
+		if err := config.UpdateLayoutState(ra.layoutPath, change); err != nil {
 			ui.AppLog.Warn("could not remember the layout: %v", err)
 		}
-	})
+	}
+	ra.split.SetOnResize(func(rows int) { save(func(s *config.LayoutState) { s.MailListRows = rows }) })
+	if ra.outer != nil {
+		if st.LogPaneRows > 0 {
+			ra.outer.SetBottomRows(st.LogPaneRows)
+		}
+		ra.outer.SetOnResize(func(rows int) { save(func(s *config.LayoutState) { s.LogPaneRows = rows }) })
+	}
 }
 
 // Stop stops the application and removes the pages written for the browser.

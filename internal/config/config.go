@@ -147,6 +147,22 @@ type UIConfig struct {
 	AttachmentDir string `yaml:"attachment_dir"`
 	// Browser picks the themes of the page b opens.
 	Browser BrowserUIConfig `yaml:"browser"`
+	// LogPane shows the log as a pane at the bottom of the main screen;
+	// nil means yes. LogPaneRows is its height in lines (0: 12). Dragging
+	// its border overrides it (see LayoutState).
+	LogPane     *bool `yaml:"log_pane"`
+	LogPaneRows int   `yaml:"log_pane_rows"`
+}
+
+// LogPaneOn reports whether the log pane is shown (the default).
+func (u UIConfig) LogPaneOn() bool { return u.LogPane == nil || *u.LogPane }
+
+// LogPaneHeight is the log pane's height in lines: log_pane_rows, else 12.
+func (u UIConfig) LogPaneHeight() int {
+	if u.LogPaneRows > 0 {
+		return u.LogPaneRows
+	}
+	return 12
 }
 
 // BrowserUIConfig names the themes of the browser page's Light and Dark

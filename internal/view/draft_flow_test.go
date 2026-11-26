@@ -143,7 +143,7 @@ func newFlowHarness(t *testing.T, extraFolders ...string) *flowHarness {
 	screen.SetSize(140, 40)
 	uiApp.SetScreen(screen)
 
-	cfg := &config.Config{}
+	cfg := noLogPane()
 	cfg.UI.Editor = "sh " + fakeEditor(t, capture) + " " + capture
 	ra := NewRootApp(uiApp, cfg, mail.NewManager([]*mail.Account{{Name: "flow", Config: acctCfg}}),
 		map[string]msync.Account{"flow": eng}, ds, events)

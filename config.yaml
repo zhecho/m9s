@@ -36,6 +36,8 @@ ui:
   editor: $EDITOR
   date_format: "Jan 02 15:04"
   mail_list_rows: 10      # messages visible in the mail list; the preview gets the rest (drag the border to change)
+  log_pane: true          # the log as a pane at the bottom (false: only the full-screen log page, l)
+  log_pane_rows: 12       # its height in lines (drag its border to change)
 
 search:
   local_index: ~/.cache/m9s/index

@@ -10,6 +10,15 @@ import (
 // border). It is remembered between runs and is not part of config.yaml.
 type LayoutState struct {
 	MailListRows int `json:"mail_list_rows,omitempty"`
+	LogPaneRows  int `json:"log_pane_rows,omitempty"`
+}
+
+// UpdateLayoutState changes the saved layout with change and saves it,
+// keeping what change does not touch (the other pane's size).
+func UpdateLayoutState(path string, change func(*LayoutState)) error {
+	st := LoadLayoutState(path)
+	change(&st)
+	return SaveLayoutState(path, st)
 }
 
 // DefaultLayoutStatePath is ~/.local/state/m9s/layout.json, or under
