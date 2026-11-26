@@ -999,7 +999,9 @@ list.
 is on, only the selected messages it matches are acted on; changing the
 filter drops the ones `A` selected beyond the loaded rows. While an action on
 the selection runs, the status bar says so (`Archiving 412 conversations…`)
-and another one waits until it is done. Messages that fail stay selected, and
+and, every second, how far it got (`Archiving 120 of 412 conversations…`);
+the log notes the count every 10 seconds. Another action waits until it is
+done. Messages that fail stay selected, and
 the status bar says how many.
 
 Terminals keep some modifier clicks for themselves: `cmd`-click is never
@@ -1016,6 +1018,13 @@ In Deleted Items, `d` asks:
   Deleted Items. A second prompt names how many and starts on **Cancel**, so
   a stray Enter cannot empty the folder;
 - **Cancel**.
+
+With messages selected, `d` asks once for all of them, starting on
+**Cancel**. On Gmail and Microsoft they go in a few requests (Gmail: a
+thousand per batch delete; Microsoft: twenty per `$batch`) after one look at
+the server's Trash. Only those still there are deleted: one restored on
+another device meanwhile stays selected, and the status bar counts it as
+failed (`no longer in Trash`). On IMAP they are deleted one by one.
 
 ### `:` command prompt
 

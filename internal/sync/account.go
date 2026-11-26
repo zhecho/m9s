@@ -46,6 +46,16 @@ type Account interface {
 	SaveSentCopy(ctx context.Context, msg []byte) (string, error)
 }
 
+// BulkDeleter is offered by accounts that delete many messages in the
+// trash for good in a few requests. It keeps PermanentDelete's guard: only
+// what is still in the trash on the server is deleted, one restored
+// meanwhile fails with ErrNotInTrash, one already gone is done. progress is
+// told how many more ids were dealt with, done or failed. failed holds the
+// ids not deleted, with why.
+type BulkDeleter interface {
+	PermanentDeleteMany(ctx context.Context, folder string, ids []string, progress func(n int)) (failed map[string]error)
+}
+
 // Labels is offered by accounts whose messages carry labels.
 type Labels interface {
 	AccountLabels() []*mail.Folder // user + system labels that can be applied

@@ -586,3 +586,50 @@ func TestMicrosoftEngine_signInAgain(t *testing.T) {
 		}
 	}
 }
+
+// A selection in Deleted Items goes in $batch requests, keeping the guard:
+// one restored meanwhile is refused.
+func TestMicrosoftEngine_permanentDeleteManyBatchesInTrashOnly(t *testing.T) {
+	var trashed []string
+	var restored string
+	h := newMicrosoft(t, func(f *graphtest.Fake) {
+		for range 3 {
+			trashed = append(trashed, f.AddMessage(f.FolderID("deleteditems"), graphtest.Message{Subject: "x"}))
+		}
+		restored = f.AddMessage(f.FolderID("deleteditems"), graphtest.Message{Subject: "r"})
+	})
+	h.synced()
+	h.f.Move(restored, h.f.FolderID("inbox")) // on another device
+
+	bulk, ok := msync.Account(h.eng).(msync.BulkDeleter)
+	if !ok {
+		t.Fatal("the Microsoft engine does not delete in bulk")
+	}
+	reached := 0
+	before := h.f.Count("/v1.0/$batch")
+	failed := bulk.PermanentDeleteMany(context.Background(), "Trash",
+		append(slices.Clone(trashed), restored), func(n int) { reached += n })
+
+	if len(failed) != 1 || !errors.Is(failed[restored], msync.ErrNotInTrash) {
+		t.Fatalf("failed = %v, want only the restored one, ErrNotInTrash", failed)
+	}
+	for _, id := range trashed {
+		if m, ok := h.f.Message(id); ok && m.FolderID == h.f.FolderID("deleteditems") {
+			t.Errorf("%s is still in Deleted Items", id)
+		}
+	}
+	if m, ok := h.f.Message(restored); !ok || m.FolderID != h.f.FolderID("inbox") {
+		t.Fatal("the restored message was deleted")
+	}
+	if n := h.f.Count("/v1.0/$batch") - before; n != 1 {
+		t.Errorf("%d $batch requests, want 1", n)
+	}
+	if reached != 4 {
+		t.Errorf("progress reached %d, want 4", reached)
+	}
+	for _, id := range h.ids("Trash") {
+		if slices.Contains(trashed, id) {
+			t.Errorf("row of deleted %s kept", id)
+		}
+	}
+}

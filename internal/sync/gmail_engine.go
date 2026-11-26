@@ -264,6 +264,16 @@ func (e *GmailEngine) PermanentDelete(ctx context.Context, _ string, id string) 
 	return e.forget([]string{id})
 }
 
+// PermanentDeleteMany deletes ids for good with batchDelete, a thousand
+// per request, after one listing of the Trash (BulkDeleter).
+func (e *GmailEngine) PermanentDeleteMany(ctx context.Context, folder string, ids []string, progress func(int)) map[string]error {
+	defer kick(e.pollKick)
+	return permanentDeleteMany(ctx, ids, gmail.BatchDeleteMax, progress,
+		func(ctx context.Context) ([]string, error) { return e.listAll(ctx, "TRASH", "") },
+		e.api.BatchDelete, e.forget,
+		func(ctx context.Context, id string) error { return e.PermanentDelete(ctx, folder, id) })
+}
+
 // EmptyTrash deletes every message in the Trash for good.
 func (e *GmailEngine) EmptyTrash(ctx context.Context) (int, error) {
 	ids, err := e.listAll(ctx, "TRASH", "")

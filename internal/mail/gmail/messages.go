@@ -25,8 +25,8 @@ type MsgMeta struct {
 // shows, what threading needs, and Content-Type for the attachment sign.
 var metadataHeaders = []string{"From", "To", "Cc", "Subject", "Date", "Message-ID", "In-Reply-To", "Content-Type"}
 
-// batchDeleteMax is the most ids Gmail takes in one batchDelete.
-const batchDeleteMax = 1000
+// BatchDeleteMax is the most ids Gmail takes in one batchDelete.
+const BatchDeleteMax = 1000
 
 // listPageSize is how many ids one messages.list page asks for (Gmail's maximum).
 const listPageSize = 500
@@ -145,10 +145,10 @@ func (c *Client) Delete(ctx context.Context, id string) error {
 	return c.sendJSON(ctx, http.MethodDelete, msgPath(id), nil, nil, true)
 }
 
-// BatchDelete permanently deletes messages, at most batchDeleteMax per call.
+// BatchDelete permanently deletes messages, at most BatchDeleteMax per call.
 func (c *Client) BatchDelete(ctx context.Context, ids []string) error {
-	for start := 0; start < len(ids); start += batchDeleteMax {
-		chunk := ids[start:min(start+batchDeleteMax, len(ids))]
+	for start := 0; start < len(ids); start += BatchDeleteMax {
+		chunk := ids[start:min(start+BatchDeleteMax, len(ids))]
 		in := struct {
 			IDs []string `json:"ids"`
 		}{chunk}

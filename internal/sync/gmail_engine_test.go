@@ -893,3 +893,50 @@ func TestGmailEngine_MessageInTwoLabelsFetchedOnce(t *testing.T) {
 		}
 	}
 }
+
+// A selection in Trash is deleted with one batchDelete, not a request or
+// two per message, and keeps the guard: one restored meanwhile is refused,
+// one already gone is done.
+func TestGmailEngine_PermanentDeleteManyBatchesInTrashOnly(t *testing.T) {
+	var trashed []string
+	var restored, gone string
+	h := newGmail(t, func(f *gmailtest.Fake) {
+		for i := range 3 {
+			trashed = append(trashed, f.AddMessage(gmailtest.Message{LabelIDs: []string{"TRASH"}, Raw: gRaw("t", fmt.Sprint("t", i, "@x"))}))
+		}
+		restored = f.AddMessage(gmailtest.Message{LabelIDs: []string{"TRASH"}, Raw: gRaw("r", "r@x")})
+		gone = f.AddMessage(gmailtest.Message{LabelIDs: []string{"TRASH"}, Raw: gRaw("g", "g@x")})
+	})
+	h.synced()
+	h.f.ModifyLabels(restored, []string{"INBOX"}, []string{"TRASH"}) // on another device
+	h.f.RemoveMessage(gone)                                          // deleted elsewhere
+
+	bulk, ok := msync.Account(h.eng).(msync.BulkDeleter)
+	if !ok {
+		t.Fatal("the Gmail engine does not delete in bulk")
+	}
+	reached := 0
+	failed := bulk.PermanentDeleteMany(context.Background(), "Trash",
+		append(slices.Clone(trashed), restored, gone), func(n int) { reached += n })
+
+	if len(failed) != 1 || !errors.Is(failed[restored], msync.ErrNotInTrash) {
+		t.Fatalf("failed = %v, want only the restored one, ErrNotInTrash", failed)
+	}
+	for _, id := range trashed {
+		if _, ok := h.f.Message(id); ok {
+			t.Errorf("%s is still on the server", id)
+		}
+	}
+	if _, ok := h.f.Message(restored); !ok {
+		t.Fatal("the restored message was deleted")
+	}
+	if n := h.f.Count("/gmail/v1/users/me/messages/batchDelete"); n != 1 || deletes(h.f) != 1 {
+		t.Errorf("%d batchDelete, %d delete requests; want one batchDelete", n, deletes(h.f))
+	}
+	if reached != 5 {
+		t.Errorf("progress reached %d, want 5", reached)
+	}
+	if got := h.ids("Trash"); len(got) != 0 {
+		t.Errorf("Trash rows = %v", got)
+	}
+}

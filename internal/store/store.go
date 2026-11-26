@@ -821,8 +821,13 @@ func (s *Store) PruneSharedBodies(account string) error {
 	if err != nil {
 		return wrap(err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// One read of the account's ids, not a query per file: the key starts
+	// (account, folder), so a lookup by id scans the whole account, and a
+	// Gmail delete prunes after every message.
+	kept, err := s.accountIDs(account)
+	if err != nil {
+		return err
+	}
 	for _, e := range entries {
 		name, ok := strings.CutSuffix(e.Name(), ".eml")
 		if e.IsDir() || !ok {
@@ -832,15 +837,31 @@ func (s *Store) PruneSharedBodies(account string) error {
 		if err != nil {
 			continue
 		}
-		var n int
-		if err := s.db.QueryRow("SELECT COUNT(*) FROM messages WHERE account = ? AND id = ?", account, id).Scan(&n); err != nil {
-			return wrap(err)
-		}
-		if n == 0 {
+		if !kept[id] {
 			_ = os.Remove(filepath.Join(accountDir, e.Name()))
 		}
 	}
 	return nil
+}
+
+// accountIDs is the set of message ids stored for account, in any folder.
+func (s *Store) accountIDs(account string) (map[string]bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query("SELECT DISTINCT id FROM messages WHERE account = ?", account)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	defer rows.Close()
+	ids := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, wrap(err)
+		}
+		ids[id] = true
+	}
+	return ids, wrap(rows.Err())
 }
 
 // --- what the background copy needs ---

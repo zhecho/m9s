@@ -34,7 +34,7 @@ const (
 	// searchPageSize is a SearchPage page: as many as the mail list loads.
 	searchPageSize = 50
 	searchMax      = 500 // results Search returns at most
-	batchMax       = 20  // requests per $batch (Graph's limit)
+	batchMax       = BatchMax
 )
 
 type apiAddr struct {
@@ -265,6 +265,9 @@ type batchResp struct {
 	Headers map[string]string `json:"headers"`
 	Body    json.RawMessage   `json:"body"`
 }
+
+// BatchMax is the most requests Graph takes in one $batch.
+const BatchMax = 20
 
 // PermanentDeleteAll deletes messages for good, batchMax per $batch
 // request. Graph runs a batch's requests side by side and may throttle

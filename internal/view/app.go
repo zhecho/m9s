@@ -115,7 +115,8 @@ type RootApp struct {
 	// list is what the open list asks its engine's Lister for; debounce
 	// delays the filter's folder search while typing (tests: at once).
 	list     listState
-	bulkBusy bool // a bulk action on the selection is running (UI goroutine)
+	bulkBusy bool          // a bulk action on the selection is running (UI goroutine)
+	bulkTick time.Duration // how often a running bulk action shows its progress; 0: every second
 	// logPagePanel draws the log page, under its filter.
 	logPagePanel *logPanel
 	// The log pane at the bottom of the main screen (ui.log_pane): its

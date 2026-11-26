@@ -418,6 +418,30 @@ func (e *MicrosoftEngine) PermanentDelete(ctx context.Context, _ string, id stri
 	return e.forget([]string{id})
 }
 
+// PermanentDeleteMany deletes ids for good in $batch requests, after one
+// listing of Deleted Items (BulkDeleter).
+func (e *MicrosoftEngine) PermanentDeleteMany(ctx context.Context, folder string, ids []string, progress func(int)) map[string]error {
+	defer kick(e.pollKick)
+	return permanentDeleteMany(ctx, ids, graph.BatchMax, progress,
+		func(ctx context.Context) ([]string, error) {
+			trash := e.folderID(msTrash)
+			if trash == "" {
+				return nil, errors.New("no Deleted Items folder on this account")
+			}
+			msgs, err := e.api.List(ctx, trash)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]string, 0, len(msgs))
+			for _, m := range msgs {
+				out = append(out, m.ID)
+			}
+			return out, nil
+		},
+		e.api.PermanentDeleteAll, e.forget,
+		func(ctx context.Context, id string) error { return e.PermanentDelete(ctx, folder, id) })
+}
+
 // EmptyTrash deletes every message in Deleted Items for good.
 func (e *MicrosoftEngine) EmptyTrash(ctx context.Context) (int, error) {
 	trash := e.folderID(msTrash)

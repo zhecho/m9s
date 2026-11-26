@@ -116,6 +116,12 @@ func (sb *StatusBar) InfoApp(msg string) {
 	sb.setFlash(msg, sb.skin.Colors["flash_ok"], 3*time.Second)
 }
 
+// Progress shows a green message in the flash row without logging it:
+// work in progress, said again every second, would flood the log.
+func (sb *StatusBar) Progress(msg string) {
+	sb.setFlash(msg, sb.skin.Colors["flash_ok"], 3*time.Second)
+}
+
 // ErrorApp is Error for a message about m9s itself, not an account.
 func (sb *StatusBar) ErrorApp(msg string) {
 	AppLog.Error("%s", msg)

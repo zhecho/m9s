@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/zhecho/m9s/internal/mail"
 	msync "github.com/zhecho/m9s/internal/sync"
@@ -216,8 +218,19 @@ func (ra *RootApp) deleteMarked(acct *mail.Account, eng msync.Account, folder *m
 				if label != "Delete Forever" {
 					return
 				}
-				ra.applyToMarked("delete", acct, eng, folder, envs,
-					func(n int) string { return "Permanently deleted " + ra.countText(acct, folder, n) },
+				done := func(n int) string { return "Permanently deleted " + ra.countText(acct, folder, n) }
+				if bulk, ok := eng.(msync.BulkDeleter); ok { // a few requests for the lot
+					ra.runOnMarked("delete", acct, eng, folder, envs, done,
+						func(ctx context.Context, envs []*mail.Envelope, progress func(int)) map[string]error {
+							ids := make([]string, len(envs))
+							for i, env := range envs {
+								ids[i] = env.ID
+							}
+							return bulk.PermanentDeleteMany(ctx, folder.Name, ids, progress)
+						}, nil, false)
+					return
+				}
+				ra.applyToMarked("delete", acct, eng, folder, envs, done,
 					func(ctx context.Context, env *mail.Envelope) error {
 						return eng.PermanentDelete(ctx, folder.Name, env.ID)
 					}, nil)
@@ -242,6 +255,24 @@ func (ra *RootApp) deleteMarked(acct *mail.Account, eng msync.Account, folder *m
 // ready for the next action on the same selection.
 func (ra *RootApp) applyToMarked(tag string, acct *mail.Account, eng msync.Account, folder *mail.Folder, envs []*mail.Envelope,
 	done func(n int) string, op func(context.Context, *mail.Envelope) error, after func(), keep ...bool) {
+	each := func(ctx context.Context, envs []*mail.Envelope, progress func(int)) map[string]error {
+		failed := make(map[string]error)
+		for _, env := range envs {
+			if err := op(ctx, env); err != nil {
+				failed[env.ID] = err
+			}
+			progress(1)
+		}
+		return failed
+	}
+	ra.runOnMarked(tag, acct, eng, folder, envs, done, each, after, len(keep) > 0 && keep[0])
+}
+
+// runOnMarked is applyToMarked with run doing the work on all of envs at
+// once: it tells progress how many more it dealt with and returns the ids
+// that failed, with why.
+func (ra *RootApp) runOnMarked(tag string, acct *mail.Account, eng msync.Account, folder *mail.Folder, envs []*mail.Envelope,
+	done func(n int) string, run func(context.Context, []*mail.Envelope, func(int)) map[string]error, after func(), keep bool) {
 	// One bulk action at a time: a selection of thousands takes a while, and
 	// pressing the key again must not queue the same work twice.
 	if ra.bulkBusy {
@@ -249,14 +280,17 @@ func (ra *RootApp) applyToMarked(tag string, acct *mail.Account, eng msync.Accou
 		return
 	}
 	ra.bulkBusy = true
-	ra.uiApp.StatusBar.Info(bulkDoing(tag, ra.countText(acct, folder, len(envs))))
+	total := ra.countText(acct, folder, len(envs))
+	ra.uiApp.StatusBar.Info(bulkDoing(tag, total))
+	var reached atomic.Int64 // messages tried so far, done or failed
+	stopProgress := ra.bulkProgress(acct, tag, total, &reached)
 	go func() {
-		ctx := context.Background()
+		errs := run(context.Background(), envs, func(n int) { reached.Add(int64(n)) })
 		var doneIDs []string
 		var firstErr error
 		failed := 0
 		for _, env := range envs {
-			if err := op(ctx, env); err != nil {
+			if err, bad := errs[env.ID]; bad {
 				ui.AppLog.Error("[%s] %q failed: %v", tag, env.Subject, err)
 				if firstErr == nil {
 					firstErr = err
@@ -266,9 +300,10 @@ func (ra *RootApp) applyToMarked(tag string, acct *mail.Account, eng msync.Accou
 			}
 			doneIDs = append(doneIDs, env.ID)
 		}
-		ra.uiApp.QueueUpdateDraw(func() {
+		stopProgress()
+		ra.onUI(func() {
 			ra.bulkBusy = false
-			if len(keep) == 0 || !keep[0] {
+			if !keep {
 				ra.maillist.Unmark(doneIDs...)
 			}
 			switch {
@@ -386,6 +421,44 @@ func (ra *RootApp) doMarked(action ui.Action, envs []*mail.Envelope) {
 				return eng.SetFlags(ctx, src, env.ID, []string{`\Flagged`}, on)
 			}, nil, true)
 	}
+}
+
+// bulkProgressLog is how often a running bulk action logs how far it got;
+// the status bar says it every tick.
+const bulkProgressLog = 10
+
+// bulkProgress shows, every tick until stop is called, how many of total a
+// bulk action has reached ("Deleting 120 of 465 messages…"), and logs it
+// every bulkProgressLog ticks.
+func (ra *RootApp) bulkProgress(acct *mail.Account, tag, total string, reached *atomic.Int64) (stop func()) {
+	tick := ra.bulkTick
+	if tick <= 0 {
+		tick = time.Second
+	}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(tick)
+		defer t.Stop()
+		for n := 1; ; n++ {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+			}
+			msg := bulkDoing(tag, thousands(int(reached.Load()))+" of "+total)
+			logIt := n%bulkProgressLog == 0
+			ra.onUI(func() {
+				if !ra.bulkBusy { // finished meanwhile: the result is on screen
+					return
+				}
+				ra.uiApp.StatusBar.Progress(msg)
+				if logIt {
+					ui.AppLog.Info("[%s] %s", acct.Name, msg)
+				}
+			})
+		}
+	}()
+	return func() { close(done) }
 }
 
 // bulkDoing is the status line while a bulk action runs.

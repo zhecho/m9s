@@ -873,3 +873,35 @@ func TestEnvelopesByID_findsAMessageInAnyFolder(t *testing.T) {
 		t.Error("nil store must hold nothing")
 	}
 }
+
+// A Gmail delete prunes after every message, so the prune must not grow
+// with files × rows: 20,000 of each (a real mailbox) took a minute.
+func TestPruneSharedBodies_largeMailboxIsQuick(t *testing.T) {
+	if testing.Short() {
+		t.Skip("seeds 20,000 messages")
+	}
+	s, dir := open(t)
+	const n = 20000
+	list := make([]*mail.Envelope, n)
+	for i := range list {
+		list[i] = gmailEnv(fmt.Sprintf("m%05d", i), "t", int64(i))
+	}
+	must(t, s.AddMessages("acct", "INBOX", list))
+	must(t, os.MkdirAll(filepath.Join(dir, "acct"), 0o700))
+	for i := range n + 1 { // one more file than rows: an orphan
+		must(t, os.WriteFile(filepath.Join(dir, "acct", fmt.Sprintf("m%05d.eml", i)), []byte("raw"), 0o600))
+	}
+
+	start := time.Now()
+	must(t, s.PruneSharedBodies("acct"))
+	took := time.Since(start)
+	if took > 2*time.Second {
+		t.Errorf("prune of %d bodies took %v", n, took)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "acct", fmt.Sprintf("m%05d.eml", n))); !os.IsNotExist(err) {
+		t.Errorf("the orphan is still on disk: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "acct", "m00000.eml")); err != nil {
+		t.Errorf("prune dropped a body still referenced: %v", err)
+	}
+}

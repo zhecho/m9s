@@ -10,6 +10,7 @@ import (
 	tcell "github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
 	"github.com/zhecho/m9s/internal/mail"
+	msync "github.com/zhecho/m9s/internal/sync"
 )
 
 // trashStub is a moverStub that can also delete for good.
@@ -248,5 +249,93 @@ func TestFlow_markedMove(t *testing.T) {
 	}
 	if n := len(h.serverFolder("INBOX")); n != 1 {
 		t.Errorf("INBOX has %d messages, want 1", n)
+	}
+}
+
+// slowTrashStub deletes the first message, then waits for release.
+type slowTrashStub struct {
+	trashStub
+	release chan struct{}
+}
+
+func (s *slowTrashStub) PermanentDelete(ctx context.Context, folder, id string) error {
+	if id != "1" {
+		<-s.release
+	}
+	return s.trashStub.PermanentDelete(ctx, folder, id)
+}
+
+// A bulk action that takes a while says how far it got: the first status
+// line flashes away after 3s, and a stuck-looking screen is all there was.
+func TestDelete_markedShowsProgress(t *testing.T) {
+	stub := &slowTrashStub{release: make(chan struct{})}
+	stub.rows = threeMessages()
+	ra := imapApp(t, stub, stub.rows)
+	queued := make(chan func(), 16)
+	ra.deliver = func(fn func()) { queued <- fn } // this goroutine is the UI one
+	ra.bulkTick = 10 * time.Millisecond
+	ra.currentFolder = &mail.Folder{Name: "Trash"}
+	for i := range 3 {
+		ra.maillist.ToggleMark(i)
+	}
+	sendRune(ra, 'd')
+	ra.testDeleteModalDone(0, "Delete Forever")
+
+	untilFlash := func(want string) {
+		t.Helper()
+		deadline := time.After(2 * time.Second)
+		for !strings.Contains(ra.uiApp.StatusBar.FlashText(), want) {
+			select {
+			case fn := <-queued:
+				fn()
+			case <-deadline:
+				t.Fatalf("status = %q, want %q", ra.uiApp.StatusBar.FlashText(), want)
+			}
+		}
+	}
+	untilFlash("Deleting 1 of 3 messages…")
+	close(stub.release)
+	untilFlash("Permanently deleted 3 messages")
+}
+
+// bulkTrashStub deletes in bulk; "3" was restored on another device.
+type bulkTrashStub struct{ trashStub }
+
+func (s *bulkTrashStub) PermanentDeleteMany(_ context.Context, folder string, ids []string, progress func(int)) map[string]error {
+	s.record("PermanentDeleteMany " + folder + " " + strings.Join(ids, ","))
+	progress(len(ids))
+	return map[string]error{"3": msync.ErrNotInTrash}
+}
+
+// An account that deletes in bulk gets the whole selection in one call,
+// and the one it refuses stays selected, named in the status bar.
+func TestDelete_markedInTrashInBulk(t *testing.T) {
+	stub := &bulkTrashStub{}
+	stub.rows = threeMessages()
+	ra := imapApp(t, stub, stub.rows)
+	queued := make(chan func(), 16)
+	ra.deliver = func(fn func()) { queued <- fn }
+	ra.currentFolder = &mail.Folder{Name: "Trash"}
+	for i := range 3 {
+		ra.maillist.ToggleMark(i)
+	}
+	sendRune(ra, 'd')
+	ra.testDeleteModalDone(0, "Delete Forever")
+
+	want := "Permanently deleted 2 messages; 1 failed: no longer in Trash"
+	deadline := time.After(2 * time.Second)
+	for !strings.Contains(ra.uiApp.StatusBar.FlashText(), want) {
+		select {
+		case fn := <-queued:
+			fn()
+		case <-deadline:
+			t.Fatalf("status = %q, want %q", ra.uiApp.StatusBar.FlashText(), want)
+		}
+	}
+	if calls := stub.called(); !slices.Equal(calls, []string{"PermanentDeleteMany Trash 1,2,3"}) {
+		t.Errorf("calls = %q, want one bulk delete", calls)
+	}
+	if got := markedIDs(ra.maillist); !slices.Equal(got, []string{"3"}) {
+		t.Errorf("still marked = %v, want the refused one", got)
 	}
 }
