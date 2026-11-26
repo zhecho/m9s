@@ -6,6 +6,7 @@ import (
 
 	"github.com/zhecho/m9s/internal/mail"
 	smtpadapter "github.com/zhecho/m9s/internal/mail/smtp"
+	"github.com/zhecho/m9s/internal/store"
 )
 
 // Account is what the UI needs from one mail account, whatever the
@@ -117,7 +118,34 @@ type ServerSearch interface {
 	Search(ctx context.Context, folder, query string) ([]*mail.Envelope, error)
 }
 
+// SearchResult is one page of a server search.
+type SearchResult struct {
+	Rows []*mail.Envelope
+	// Total is how many match in all; 0 when the server does not say
+	// (Outlook). Estimate marks it as the server's estimate (Gmail).
+	Total    int
+	Estimate bool
+	// Next is the cursor of the next page; "" when there is none.
+	Next string
+}
+
+// PagedSearch is a ServerSearch that answers a page at a time and says how
+// many match.
+type PagedSearch interface {
+	SearchPage(ctx context.Context, folder, query, cursor string) (SearchResult, error)
+}
+
 var (
 	_ Account      = (*Engine)(nil)
 	_ ServerSearch = (*Engine)(nil)
 )
+
+// ErrNotListable means a folder is not listed from the local copy (Gmail's
+// All Mail, an account without one): the caller lists it as before.
+var ErrNotListable = errors.New("folder is not listed from the local copy")
+
+// Lister pages a folder's list and filters it over the whole folder. Rows
+// come newest first, with how many match in all.
+type Lister interface {
+	List(ctx context.Context, folder string, q store.ListQuery) ([]*mail.Envelope, int, error)
+}

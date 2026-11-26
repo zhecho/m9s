@@ -235,8 +235,8 @@ func TestMigrateV4KeepsData(t *testing.T) {
 	defer s.Close()
 	var version int
 	must(t, s.db.QueryRow("PRAGMA user_version").Scan(&version))
-	if version != 5 || schemaVersion != 5 {
-		t.Errorf("user_version = %d, schemaVersion = %d, want 5", version, schemaVersion)
+	if version != 6 || schemaVersion != 6 {
+		t.Errorf("user_version = %d, schemaVersion = %d, want 6 (through migrateV5)", version, schemaVersion)
 	}
 	if e, ok := s.Envelope("acct", "INBOX", "m1"); !ok || e.Subject != "kept" {
 		t.Errorf("row lost: %+v %v", e, ok)

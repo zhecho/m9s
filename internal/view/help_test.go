@@ -32,9 +32,9 @@ func TestHelpSections_listEveryBoundAction(t *testing.T) {
 		"<o> Open attachment", "<e> Edit draft", "<*> Star", "<a> Archive", "<L> Labels",
 		"<f> Forward", "<m> Move to folder", "<:help> This help", "<?> Help", "<:config> Edit config", "<q> Quit",
 		// everything else the README documents
-		"<space> Select / unselect", "<shift-click> Select / unselect", "<m> Move selected",
-		"<d> Delete selected", "<esc> Clear selection", "<d> Delete forever / all",
-		"<enter> Search server", "<esc> Clear filter / search",
+		"<space> Select / unselect", "<shift-click> Select / unselect", "<A> Select all shown / none",
+		"<m d> Move / delete selected", "<a u *> Archive / unread / star", "<esc> Clear selection", "<d> Delete forever / all",
+		"<enter> Keep filter", "<\\> Search the server", "<esc> Clear filter / search",
 		"<enter> Move / save / open", "<tab ←/→> Choose button", "<q/esc/l> Close",
 		"<j/k g/G> Scroll", "<:q :quit> Quit", "<shift-tab> Previous message",
 		"<space> Toggle label",

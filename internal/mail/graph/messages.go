@@ -31,8 +31,10 @@ const (
 	listPage   = 500 // messages per listing page ($top; Graph allows 1000)
 	deltaPage  = 200 // messages per delta page (odata.maxpagesize)
 	searchPage = 250
-	searchMax  = 500 // results Search returns at most
-	batchMax   = 20  // requests per $batch (Graph's limit)
+	// searchPageSize is a SearchPage page: as many as the mail list loads.
+	searchPageSize = 50
+	searchMax      = 500 // results Search returns at most
+	batchMax       = 20  // requests per $batch (Graph's limit)
 )
 
 type apiAddr struct {
@@ -349,6 +351,27 @@ func (c *Client) MasterCategories(ctx context.Context) ([]string, error) {
 		names = append(names, v.DisplayName)
 	}
 	return names, nil
+}
+
+// SearchPage runs one page of an Outlook search: the first for link "",
+// else the page link names (the nextLink of the last). It returns the next
+// page's link, "" on the last.
+func (c *Client) SearchPage(ctx context.Context, text, link string) ([]Msg, string, error) {
+	u := link
+	if u == "" {
+		quoted := `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(text) + `"`
+		u = c.url("/me/messages?$search=" + qv(quoted) + "&$top=" + itoa(searchPageSize) + "&$select=" + qv(msgSelect))
+	} else {
+		var err error
+		if u, err = c.link(link); err != nil {
+			return nil, "", err
+		}
+	}
+	var p page[apiMsg]
+	if err := c.call(ctx, request{method: http.MethodGet, url: u, header: map[string]string{"ConsistencyLevel": "eventual"}, out: &p, idempotent: true}); err != nil {
+		return nil, "", err
+	}
+	return toMsgs(p.Value), p.NextLink, nil
 }
 
 // Search runs an Outlook search (e.g. `from:bob subject:"q3 report"`) over

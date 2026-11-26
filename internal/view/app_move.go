@@ -167,7 +167,7 @@ func (ra *RootApp) countText(acct *mail.Account, folder *mail.Folder, n int) str
 	if n != 1 {
 		noun += "s"
 	}
-	return fmt.Sprintf("%d %s", n, noun)
+	return thousands(n) + " " + noun
 }
 
 // moveMarked moves every marked message (or conversation) out of folder to
@@ -237,8 +237,19 @@ func (ra *RootApp) deleteMarked(acct *mail.Account, eng msync.Account, folder *m
 // other, then says how many it did (done) or what failed, unmarks the ones
 // done and reloads folder's list and counts. after, if set, runs off the UI
 // goroutine once something was done (e.g. the destination's count).
+//
+// keep leaves the done ones marked: after u or * they are still in the list,
+// ready for the next action on the same selection.
 func (ra *RootApp) applyToMarked(tag string, acct *mail.Account, eng msync.Account, folder *mail.Folder, envs []*mail.Envelope,
-	done func(n int) string, op func(context.Context, *mail.Envelope) error, after func()) {
+	done func(n int) string, op func(context.Context, *mail.Envelope) error, after func(), keep ...bool) {
+	// One bulk action at a time: a selection of thousands takes a while, and
+	// pressing the key again must not queue the same work twice.
+	if ra.bulkBusy {
+		ra.uiApp.StatusBar.Info("Still working on the last action; try again when it is done")
+		return
+	}
+	ra.bulkBusy = true
+	ra.uiApp.StatusBar.Info(bulkDoing(tag, ra.countText(acct, folder, len(envs))))
 	go func() {
 		ctx := context.Background()
 		var doneIDs []string
@@ -256,7 +267,10 @@ func (ra *RootApp) applyToMarked(tag string, acct *mail.Account, eng msync.Accou
 			doneIDs = append(doneIDs, env.ID)
 		}
 		ra.uiApp.QueueUpdateDraw(func() {
-			ra.maillist.Unmark(doneIDs...)
+			ra.bulkBusy = false
+			if len(keep) == 0 || !keep[0] {
+				ra.maillist.Unmark(doneIDs...)
+			}
 			switch {
 			case failed == 0:
 				ui.AppLog.Info("[%s] %s", tag, done(len(doneIDs)))
@@ -275,6 +289,120 @@ func (ra *RootApp) applyToMarked(tag string, acct *mail.Account, eng msync.Accou
 		go eng.RefreshBadge(context.Background(), folder.Name)
 		ra.loadEnvelopes(acct, folder)
 	}()
+}
+
+// actOnMarked handles a, u and * with messages marked: archive all of them,
+// mark all of them unread, or star all of them — unstar them when every one
+// is starred already. On Gmail, conversation rows change as whole
+// conversations, as a single a, u or * on one does. Archived ones leave the
+// selection with the list; after u and * the selection stays.
+//
+// When the selection reaches messages that are not loaded (A over a whole
+// folder or filter), it asks first: those are not on screen to look at.
+func (ra *RootApp) actOnMarked(action ui.Action, envs []*mail.Envelope) {
+	acct, folder := ra.manager.Active(), ra.currentFolder
+	if acct == nil || folder == nil || !ra.maillist.MarksBeyondLoaded() {
+		ra.doMarked(action, envs)
+		return
+	}
+	what := ra.countText(acct, folder, len(envs))
+	var question, label string
+	switch action {
+	case ui.ActionArchive:
+		question, label = "Archive "+what+"?", "Archive"
+	case ui.ActionMarkUnread:
+		question, label = "Mark "+what+" unread?", "Mark unread"
+	case ui.ActionStar:
+		question, label = "Star "+what+"?", "Star"
+		if !slices.ContainsFunc(envs, func(e *mail.Envelope) bool { return !e.IsFlagged() }) {
+			question, label = "Remove the star from "+what+"?", "Unstar"
+		}
+	default:
+		return
+	}
+	ra.showDeleteModal(question, []string{label, "Cancel"}, func() { ra.doMarked(action, envs) })
+}
+
+// doMarked carries out actOnMarked.
+func (ra *RootApp) doMarked(action ui.Action, envs []*mail.Envelope) {
+	acct, folder := ra.manager.Active(), ra.currentFolder
+	if acct == nil || folder == nil {
+		return
+	}
+	eng, ok := ra.engines[acct.Name]
+	if !ok {
+		return
+	}
+	th, threads := eng.(msync.Threads)
+	threads = threads && ra.conversationRows(acct.Name, folder.Name)
+	count := func(n int) string { return ra.countText(acct, folder, n) }
+	thread := func(ctx context.Context, env *mail.Envelope, add, remove []string) (bool, error) {
+		if threads && env.ThreadID != "" {
+			return true, th.ModifyThread(ctx, env.ThreadID, add, remove)
+		}
+		return false, nil
+	}
+	src := folder.Name
+	switch action {
+	case ui.ActionArchive:
+		mv, isMover := eng.(msync.Mover)
+		if !threads && !isMover {
+			ra.uiApp.StatusBar.Info(archiveHint)
+			return
+		}
+		ra.applyToMarked("archive", acct, eng, folder, envs,
+			func(n int) string { return "Archived " + count(n) },
+			func(ctx context.Context, env *mail.Envelope) error {
+				if did, err := thread(ctx, env, nil, []string{"INBOX"}); did {
+					return err
+				}
+				if !isMover {
+					return errors.New("archive: not available for this account")
+				}
+				return mv.Archive(ctx, src, env.ID)
+			}, nil)
+	case ui.ActionMarkUnread:
+		ra.applyToMarked("unread", acct, eng, folder, envs,
+			func(n int) string { return "Marked " + count(n) + " unread" },
+			func(ctx context.Context, env *mail.Envelope) error {
+				if did, err := thread(ctx, env, nil, []string{`\Seen`}); did {
+					return err
+				}
+				return eng.SetFlags(ctx, src, env.ID, []string{`\Seen`}, false)
+			}, nil, true)
+	case ui.ActionStar:
+		on := slices.ContainsFunc(envs, func(e *mail.Envelope) bool { return !e.IsFlagged() })
+		done := "Starred "
+		add, remove := []string{`\Flagged`}, []string(nil)
+		if !on {
+			done, add, remove = "Star removed from ", nil, []string{`\Flagged`}
+		}
+		ra.applyToMarked("star", acct, eng, folder, envs,
+			func(n int) string { return done + count(n) },
+			func(ctx context.Context, env *mail.Envelope) error {
+				if did, err := thread(ctx, env, add, remove); did {
+					return err
+				}
+				return eng.SetFlags(ctx, src, env.ID, []string{`\Flagged`}, on)
+			}, nil, true)
+	}
+}
+
+// bulkDoing is the status line while a bulk action runs.
+func bulkDoing(tag, what string) string {
+	switch tag {
+	case "move":
+		return "Moving " + what + "…"
+	case "delete":
+		return "Deleting " + what + "…"
+	case "archive":
+		return "Archiving " + what + "…"
+	case "unread":
+		return "Marking " + what + " unread…"
+	case "star":
+		return "Changing the star on " + what + "…"
+	}
+	return "Working on " + what + "…"
 }
 
 // failureText is a failed change's reason for the status bar.

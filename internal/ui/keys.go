@@ -45,6 +45,8 @@ const (
 	ActionHelp              Action = "help"
 	ActionMove              Action = "move"
 	ActionMark              Action = "mark"
+	ActionSelectAll         Action = "select_all"
+	ActionSearchServer      Action = "search_server"
 )
 
 var defaultBindings = map[Action]rune{
@@ -76,6 +78,8 @@ var defaultBindings = map[Action]rune{
 	ActionHelp:              '?',
 	ActionMove:              'm',
 	ActionMark:              ' ',
+	ActionSelectAll:         'A',
+	ActionSearchServer:      '\\',
 }
 
 // knownActions are the names a key file may bind.
@@ -89,7 +93,7 @@ var knownActions = map[Action]bool{
 	ActionCommandBar: true, ActionBack: true, ActionJumpTop: true, ActionJumpBottom: true,
 	ActionLog: true, ActionEdit: true, ActionOpenBrowser: true,
 	ActionSaveAttachments: true, ActionOpenAttachment: true, ActionHelp: true, ActionMove: true,
-	ActionMark: true,
+	ActionMark: true, ActionSelectAll: true, ActionSearchServer: true,
 }
 
 // KeyMap maps runes → Actions.

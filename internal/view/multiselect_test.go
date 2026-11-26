@@ -55,7 +55,7 @@ func TestMailList_spaceMarksAndMovesDown(t *testing.T) {
 	if got := ra.maillist.GetCell(0, 0).Text; !strings.HasPrefix(got, markSign) {
 		t.Errorf("marked row shows %q, want the %q sign", got, markSign)
 	}
-	if !strings.Contains(ra.maillist.TitleText(), "[2 selected]") {
+	if !strings.Contains(ra.maillist.TitleText(), "· 2 selected]") {
 		t.Errorf("title = %q, want it to count the selection", ra.maillist.TitleText())
 	}
 	// space on a marked row unmarks it

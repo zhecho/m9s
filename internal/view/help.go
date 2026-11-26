@@ -45,8 +45,8 @@ func helpSections(km ui.KeyMap) []helpSection {
 			{k(ui.ActionSwitchAccountPrev), "Previous account"},
 			{k(ui.ActionSwitchAccountNext), "Next account"},
 			{k(ui.ActionCommandBar), "Command"},
-			{k(ui.ActionSearchLocal), "Filter / search"},
-			{"esc", "Clear filter / search"},
+			{k(ui.ActionSearchLocal), "Filter (local copy)"},
+			{k(ui.ActionSearchServer), "Search the server"},
 			{k(ui.ActionCompose), "Compose"},
 			{k(ui.ActionSync), "Sync / reconnect"},
 			{k(ui.ActionLog), "Logs"},
@@ -78,8 +78,9 @@ func helpSections(km ui.KeyMap) []helpSection {
 		{"SELECTION", []helpEntry{
 			{k(ui.ActionMark), "Select / unselect"},
 			{"shift-click", "Select / unselect"},
-			{k(ui.ActionMove), "Move selected"},
-			{k(ui.ActionDelete), "Delete selected"},
+			{k(ui.ActionSelectAll), "Select all shown / none"},
+			{k(ui.ActionMove) + " " + k(ui.ActionDelete), "Move / delete selected"},
+			{k(ui.ActionArchive) + " " + k(ui.ActionMarkUnread) + " " + k(ui.ActionStar), "Archive / unread / star"},
 			{"esc", "Clear selection"},
 		}},
 		{"DELETED ITEMS", []helpEntry{
@@ -97,8 +98,8 @@ func helpSections(km ui.KeyMap) []helpSection {
 			{"esc", "Cancel"},
 		}},
 		{"FILTER", []helpEntry{
-			{"type", "Narrow the list"},
-			{"enter", "Search server"},
+			{"type", "Filter the whole folder"},
+			{"enter", "Keep filter"},
 			{"esc", "Clear filter / search"},
 		}},
 		{"PROMPT", []helpEntry{

@@ -3,11 +3,13 @@ package view
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	tcell "github.com/derailed/tcell/v2"
+	"github.com/derailed/tview"
 
 	"github.com/zhecho/m9s/internal/mail"
 	msync "github.com/zhecho/m9s/internal/sync"
@@ -46,11 +48,11 @@ func searchApp(t *testing.T) (*RootApp, *stubSearch) {
 	return ra, stub
 }
 
-// enterSearch types text in the / prompt, presses Enter and delivers the
+// enterSearch types text in the \ prompt, presses Enter and delivers the
 // stub's answer.
 func enterSearch(t *testing.T, ra *RootApp, stub *stubSearch, text string) {
 	t.Helper()
-	ra.startFilter()
+	ra.startServerSearch()
 	typeInPrompt(ra, text)
 	promptKey(ra, tcell.KeyEnter) // tcell.KeyEnter
 	stub.waitCall(t, "Search INBOX "+text)
@@ -75,13 +77,24 @@ func (s *stubSearch) runQueued(t *testing.T) {
 	}
 }
 
-func TestEnterRunsServerSearch(t *testing.T) {
+// \ opens the server search prompt; Enter sends the text to the server.
+func TestBackslashRunsServerSearch(t *testing.T) {
 	ra, stub := searchApp(t)
-	enterSearch(t, ra, stub, "invoice")
+	ra.uiApp.SetFocus(ra.maillist)
+	if sendRune(ra, '\\') != nil {
+		t.Fatal("\\ was not consumed")
+	}
+	if ra.prompt == nil || !strings.Contains(ra.prompt.GetTitle(), "search") {
+		t.Fatal("\\ did not open the search prompt")
+	}
+	typeInPrompt(ra, "invoice")
+	promptKey(ra, tcell.KeyEnter)
+	stub.waitCall(t, "Search INBOX invoice")
+	stub.runQueued(t)
 	if ra.maillist.VisibleCount() != 2 {
 		t.Fatalf("rows = %d, want the 2 results", ra.maillist.VisibleCount())
 	}
-	if title := ra.maillist.GetTitle(); !strings.Contains(title, "SEARCH: invoice") {
+	if title := ra.maillist.GetTitle(); !strings.Contains(title, `IMAP search \invoice`) {
 		t.Errorf("title = %q, want the query in it", title)
 	}
 	if ra.selectedEnv == nil || ra.selectedEnv.ID != "s1" {
@@ -102,7 +115,7 @@ func TestEscLeavesSearchRestoresFolder(t *testing.T) {
 	if ra.selectedEnv == nil || ra.selectedEnv.ID != "2" {
 		t.Errorf("selected = %+v, want row 2 again", ra.selectedEnv)
 	}
-	if title := ra.maillist.GetTitle(); strings.Contains(title, "SEARCH") {
+	if title := ra.maillist.GetTitle(); strings.Contains(title, "search") {
 		t.Errorf("title = %q still says search", title)
 	}
 }
@@ -114,6 +127,31 @@ func TestEscInPromptLeavesSearch(t *testing.T) {
 	promptKey(ra, tcell.KeyEscape)
 	if ra.search != nil || ra.maillist.VisibleCount() != 3 {
 		t.Fatalf("search %v, rows %d; want left, 3", ra.search, ra.maillist.VisibleCount())
+	}
+}
+
+// Enter in the / filter only keeps the filter: the server is not asked.
+func TestFilterEnterDoesNotSearchTheServer(t *testing.T) {
+	ra, stub := searchApp(t)
+	ra.startFilter()
+	typeInPrompt(ra, "bob")
+	promptKey(ra, tcell.KeyEnter)
+	time.Sleep(50 * time.Millisecond)
+	if slices.ContainsFunc(stub.called(), func(c string) bool { return strings.HasPrefix(c, "Search") }) {
+		t.Errorf("Enter in the filter searched the server: %q", stub.called())
+	}
+	if ra.maillist.FilterQuery() != "bob" || ra.uiApp.GetFocus() != tview.Primitive(ra.maillist) {
+		t.Errorf("filter %q, focus %T; want the filter kept and the list focused", ra.maillist.FilterQuery(), ra.uiApp.GetFocus())
+	}
+}
+
+// An account that cannot search says so instead of opening the prompt.
+func TestBackslashWithoutServerSearch(t *testing.T) {
+	ra := promptApp(t) // no engine for the account
+	ra.uiApp.SetFocus(ra.maillist)
+	sendRune(ra, '\\')
+	if got := ra.uiApp.StatusBar.FlashText(); !strings.Contains(got, "server search: not available") {
+		t.Errorf("status = %q", got)
 	}
 }
 
@@ -129,16 +167,16 @@ func TestTypingStillFiltersLocally(t *testing.T) {
 	}
 }
 
-func TestSearchErrorKeepsFilter(t *testing.T) {
+func TestSearchErrorKeepsTheList(t *testing.T) {
 	ra, stub := searchApp(t)
 	stub.err = errors.New("boom")
-	ra.startFilter()
+	ra.startServerSearch()
 	typeInPrompt(ra, "bob")
 	promptKey(ra, tcell.KeyEnter)
 	stub.waitCall(t, "Search INBOX bob")
 	ra.searchArrived(ra.searchSeq, ra.manager.Active(), ra.currentFolder, "bob", "", nil, stub.err)
-	if ra.search != nil || ra.maillist.FilterQuery() != "bob" || ra.maillist.VisibleCount() != 1 {
-		t.Errorf("search %v, filter %q, rows %d; want the local filter kept", ra.search, ra.maillist.FilterQuery(), ra.maillist.VisibleCount())
+	if ra.search != nil || ra.maillist.VisibleCount() != 3 {
+		t.Errorf("search %v, rows %d; want the folder's list kept", ra.search, ra.maillist.VisibleCount())
 	}
 	if got := ra.uiApp.StatusBar.FlashText(); !strings.Contains(got, "boom") {
 		t.Errorf("status = %q, want the error", got)
@@ -149,7 +187,7 @@ func TestFolderChangeLeavesSearch(t *testing.T) {
 	ra, stub := searchApp(t)
 	enterSearch(t, ra, stub, "invoice")
 	ra.onFolderSelected(&mail.Folder{Name: "Sent"})
-	if ra.search != nil || strings.Contains(ra.maillist.TitleText(), "SEARCH") {
+	if ra.search != nil || strings.Contains(ra.maillist.TitleText(), "search") {
 		t.Errorf("search %v, title %q; want left", ra.search, ra.maillist.TitleText())
 	}
 }
@@ -165,7 +203,7 @@ func TestReloadDoesNotReplaceSearchResults(t *testing.T) {
 
 func TestStaleSearchAnswerIsDropped(t *testing.T) {
 	ra, stub := searchApp(t)
-	ra.startFilter()
+	ra.startServerSearch()
 	typeInPrompt(ra, "invoice")
 	promptKey(ra, tcell.KeyEnter)
 	stub.waitCall(t, "Search INBOX invoice")
@@ -196,7 +234,7 @@ func TestSearchResultsOnGmailAreConversations(t *testing.T) {
 	ra.deliver = func(func()) {}
 	ra.handleEvent(msync.FoldersUpdated{AccountName: "test", Folders: testFolders("INBOX", "Sent", "Trash")})
 	ra.currentFolder = &mail.Folder{Name: "Trash"} // a folder listed as messages
-	ra.startFilter()
+	ra.startServerSearch()
 	typeInPrompt(ra, "lunch")
 	promptKey(ra, tcell.KeyEnter)
 	srch.waitCall(t, "Search Trash lunch")
@@ -222,12 +260,12 @@ func (s *stubSearchThreads) Search(_ context.Context, folder, q string) ([]*mail
 func TestEscInListCancelsInFlightSearch(t *testing.T) {
 	ra, stub := searchApp(t)
 	ra.maillist.Select(1, 0)
-	ra.startFilter()
+	ra.startServerSearch()
 	typeInPrompt(ra, "invoice")
 	promptKey(ra, tcell.KeyEnter)
 	stub.waitCall(t, "Search INBOX invoice")
 	if sendKey(ra, tcell.KeyEscape) != nil { // the search has not answered yet
-		t.Fatal("Esc with a filter must be consumed")
+		t.Fatal("Esc with a search on its way must be consumed")
 	}
 	after := ra.selectedEnv // what Esc left selected
 	stub.runQueued(t)       // the answer arrives late

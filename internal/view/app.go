@@ -109,10 +109,16 @@ type RootApp struct {
 	layoutPath string // where a dragged layout is remembered; "" = not remembered
 
 	// bodyLoader fetches a message body in the background; tests replace it.
-	reloading  bool         // the mail list is being refilled by showEnvelopes
-	search     *searchState // server search results on screen, or nil
-	deliver    func(func()) // tests: where search answers are queued
-	searchSeq  int          // identifies the latest search asked for
+	reloading bool         // the mail list is being refilled by showEnvelopes
+	search    *searchState // server search results on screen, or nil
+	deliver   func(func()) // tests: where search answers are queued
+	// list is what the open list asks its engine's Lister for; debounce
+	// delays the filter's folder search while typing (tests: at once).
+	list       listState
+	bulkBusy   bool // a bulk action on the selection is running (UI goroutine)
+	searching  bool // a server search is on its way (UI goroutine)
+	debounce   func(time.Duration, func())
+	searchSeq  int // identifies the latest search asked for
 	bodyLoader func(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen bool)
 
 	// browser holds the pages handed to the web browser; openBrowser shows
@@ -150,6 +156,13 @@ func NewRootApp(uiApp *ui.App, cfg *config.Config, manager *mail.Manager,
 		now:        time.Now,
 	}
 	ra.sendFn = ra.sendDraft
+	var filterTimer *time.Timer // UI goroutine only
+	ra.debounce = func(d time.Duration, fn func()) {
+		if filterTimer != nil {
+			filterTimer.Stop()
+		}
+		filterTimer = time.AfterFunc(d, fn)
+	}
 	ra.openBrowser = openInDefaultBrowser
 	ra.bodyLoader = func(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen bool) {
 		go ra.loadBody(acct, folder, env, markSeen, ra.conversationRowsOf(acct, folder))
@@ -160,6 +173,7 @@ func NewRootApp(uiApp *ui.App, cfg *config.Config, manager *mail.Manager,
 	ra.folders.SetOnHover(ra.onFolderHover)
 	ra.folders.SetOnDraftHover(ra.onDraftHover)
 	ra.maillist = NewMailListView(uiApp.Skin, cfg.UI.DateFormat, ra.onEnvelopeSelected)
+	ra.maillist.SetNearEndFunc(ra.loadMore)
 	ra.maillist.SetMarksChangedFunc(ra.refreshMailListTitle)
 	ra.preview = NewPreviewView(uiApp.Skin)
 	ra.reader = NewReaderView(uiApp.Skin, ra.closeReader)
@@ -391,8 +405,11 @@ func (ra *RootApp) clearOpenFolder() {
 	ra.refreshMailListTitle()
 }
 
-// refreshMailListTitle re-renders the mail list title, which carries the filter.
+// refreshMailListTitle re-renders the mail list title, which carries the
+// filter and counts the rows and the selection.
 func (ra *RootApp) refreshMailListTitle() {
+	ra.maillist.SetConversations(ra.conversationRowsOf(ra.manager.Active(), ra.currentFolder))
+	ra.listTotals()
 	title := tview.Escape(ra.maillist.TitleText())
 	if ra.mailListFocused() {
 		ra.maillist.SetTitle(" [::b]" + title + "[::-] ")
@@ -459,14 +476,10 @@ func (ra *RootApp) closePrompt(focus tview.Primitive) {
 }
 
 // startFilter opens the / prompt. The mail list narrows as the user types;
-// Enter keeps the filter, moves to the list and, on accounts that can, asks
-// the server to search for the same text; Esc clears it.
+// Enter keeps the filter and moves to the list; Esc clears it. The server
+// is never asked: \ does that (startServerSearch).
 func (ra *RootApp) startFilter() {
 	previous := ra.uiApp.GetFocus()
-	keepID := "" // typing narrows the list and moves the selection: note it now
-	if ra.selectedEnv != nil {
-		keepID = ra.selectedEnv.ID
-	}
 	ra.openPrompt(false, ui.PromptConfig{
 		Label:  "filter",
 		Prefix: "/",
@@ -474,12 +487,18 @@ func (ra *RootApp) startFilter() {
 			ra.maillist.SetFilter(text)
 			ra.refreshMailListTitle()
 			ra.refreshHeader()
+			if _, ok := ra.lister(ra.manager.Active()); ok && ra.search == nil {
+				// The engine filters the whole folder, once typing pauses;
+				// until then the loaded rows are narrowed to the text.
+				ra.list.set(text)
+				acct, f := ra.manager.Active(), ra.currentFolder
+				ra.debounce(filterDelay, func() { ra.loadEnvelopes(acct, f) })
+			}
 		},
 		OnDone: func(text string, accepted bool) {
 			if accepted {
 				ra.closePrompt(ra.maillist)
 				ra.refreshMailListTitle() // focus changed after the title was last set
-				ra.startSearch(text, keepID)
 				return
 			}
 			ra.leaveSearch()
@@ -559,6 +578,10 @@ func (ra *RootApp) clearFilter() {
 	ra.maillist.SetFilter("")
 	ra.refreshMailListTitle()
 	ra.refreshHeader()
+	if _, ok := ra.lister(ra.manager.Active()); ok && ra.search == nil {
+		ra.list.set("")
+		go ra.loadEnvelopes(ra.manager.Active(), ra.currentFolder)
+	}
 }
 
 func (ra *RootApp) wireKeys() {
@@ -601,6 +624,12 @@ func (ra *RootApp) wireKeys() {
 			ra.leaveSearch()
 			return nil
 		}
+		if event.Key() == tcell.KeyEscape && ra.mailListFocused() && ra.searching {
+			ra.dropSearch() // the answer still on its way is not shown
+			ra.refreshMailListTitle()
+			ra.uiApp.StatusBar.Info("search cancelled")
+			return nil
+		}
 		if event.Key() == tcell.KeyEscape && ra.mailListFocused() && ra.maillist.FilterQuery() != "" {
 			ra.clearFilter()
 			return nil
@@ -635,6 +664,10 @@ func (ra *RootApp) wireKeys() {
 			}
 			return event
 		case ui.ActionMarkUnread, ui.ActionStar, ui.ActionArchive:
+			if marked := ra.markedMessages(); len(marked) > 0 && ra.mailListFocused() {
+				ra.actOnMarked(action, marked)
+				return nil
+			}
 			if ra.conversationAction(action) {
 				return nil
 			}
@@ -657,6 +690,12 @@ func (ra *RootApp) wireKeys() {
 			}
 			ra.maillist.MarkCursor()
 			return nil
+		case ui.ActionSelectAll:
+			if !ra.mailListFocused() {
+				return event
+			}
+			ra.selectAll()
+			return nil
 		case ui.ActionForward:
 			if ra.currentMsg != nil {
 				ra.startForward(ra.currentMsg)
@@ -667,6 +706,9 @@ func (ra *RootApp) wireKeys() {
 			return nil
 		case ui.ActionSearchLocal:
 			ra.startFilter()
+			return nil
+		case ui.ActionSearchServer:
+			ra.startServerSearch()
 			return nil
 		case ui.ActionCommandBar:
 			ra.startCommand()
@@ -875,6 +917,7 @@ func (ra *RootApp) onFolderSelected(f *mail.Folder) {
 	if ra.currentFolder == nil || ra.currentFolder.Name != f.Name {
 		ra.dropSearch() // search results belong to the folder they were asked in
 		ra.maillist.ClearMarks()
+		ra.list.set("") // a new folder starts at its first page, unfiltered
 		// A filter belongs to the folder it was typed for.
 		if ra.maillist.FilterQuery() != "" {
 			ra.maillist.SetFilter("")
@@ -911,6 +954,23 @@ func (ra *RootApp) loadEnvelopes(acct *mail.Account, f *mail.Folder) {
 	eng, ok := ra.engines[acct.Name]
 	if !ok {
 		return
+	}
+	if lister, ok := eng.(msync.Lister); ok {
+		filter, limit, gen := ra.list.snapshot()
+		rows, total, err := lister.List(context.Background(), f.Name, store.ListQuery{Filter: filter, Limit: limit})
+		if !errors.Is(err, msync.ErrNotListable) {
+			if err != nil {
+				ra.onUI(func() { ra.fetchFailed(acct.Name, "fetch failed", err) })
+				return
+			}
+			if filter == "" {
+				// Only an unfiltered list may go back to the local copy:
+				// PutEnvelopes takes it as every message from its oldest up.
+				ra.storeFetched(acct, f, rows)
+			}
+			ra.onUI(func() { ra.showListed(acct, f, rows, total, filter, gen) })
+			return
+		}
 	}
 	envelopes, err := eng.FetchHeaders(context.Background(), f.Name, 1, store.ListSize)
 	if err != nil {
@@ -966,6 +1026,7 @@ func (ra *RootApp) showFetched(acct *mail.Account, f *mail.Folder, envelopes []*
 	if !ra.isCurrent(acct, f) {
 		return
 	}
+	ra.maillist.SetListed(false)
 	ra.showEnvelopes(envelopes)
 }
 
@@ -1922,6 +1983,7 @@ func (ra *RootApp) handleEvent(ev msync.Event) {
 		ra.folders.UpdateBadge(e.AccountName, e.FolderName, e.Unseen, e.Total)
 		if ra.isActiveAccount(e.AccountName) && ra.currentFolder != nil && ra.currentFolder.Name == e.FolderName {
 			ra.refreshHeader()
+			ra.refreshMailListTitle() // the title counts the folder too
 		}
 	case msync.NewMail:
 		if ra.isActiveAccount(e.AccountName) && ra.currentFolder != nil && ra.currentFolder.Name == e.FolderName {

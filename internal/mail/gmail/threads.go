@@ -19,6 +19,13 @@ func threadPath(id string) string { return "/threads/" + url.PathEscape(id) }
 // next page ("" on the last). Spam and Trash are left out unless the query
 // asks for them, as on Gmail web.
 func (c *Client) ListThreads(ctx context.Context, query, pageToken string) (ids []string, next string, err error) {
+	ids, next, _, err = c.SearchThreads(ctx, query, pageToken)
+	return ids, next, err
+}
+
+// SearchThreads is ListThreads that also returns Gmail's estimate of how
+// many conversations match in all (resultSizeEstimate).
+func (c *Client) SearchThreads(ctx context.Context, query, pageToken string) (ids []string, next string, estimate int, err error) {
 	v := url.Values{"maxResults": {strconv.Itoa(threadPageSize)}}
 	if query != "" {
 		v.Set("q", query)
@@ -30,16 +37,17 @@ func (c *Client) ListThreads(ctx context.Context, query, pageToken string) (ids 
 		Threads []struct {
 			ID string `json:"id"`
 		} `json:"threads"`
-		NextPageToken string `json:"nextPageToken"`
+		NextPageToken      string `json:"nextPageToken"`
+		ResultSizeEstimate int    `json:"resultSizeEstimate"`
 	}
 	if err := c.getJSON(ctx, "/threads?"+v.Encode(), &out); err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 	ids = make([]string, 0, len(out.Threads))
 	for _, t := range out.Threads {
 		ids = append(ids, t.ID)
 	}
-	return ids, out.NextPageToken, nil
+	return ids, out.NextPageToken, out.ResultSizeEstimate, nil
 }
 
 // ThreadMessages returns the messages of a conversation, oldest first,

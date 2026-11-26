@@ -133,8 +133,8 @@ func TestMailList_titleText(t *testing.T) {
 	}
 	mlv.SetEnvelopes(peopleEnvelopes())
 	mlv.SetFilter("bob")
-	if got := mlv.TitleText(); got != "MAIL LIST </bob>" {
-		t.Errorf("TitleText() = %q, want MAIL LIST </bob>", got)
+	if got := mlv.TitleText(); got != "MAIL LIST: filter /bob [1]" {
+		t.Errorf("TitleText() = %q, want MAIL LIST: filter /bob [1]", got)
 	}
 }
 

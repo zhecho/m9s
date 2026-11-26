@@ -234,6 +234,12 @@ func (e *MicrosoftEngine) FetchHeaders(_ context.Context, folder string, page, p
 	return envs, nil
 }
 
+// List pages a folder from the store, filtered over the whole folder.
+func (e *MicrosoftEngine) List(_ context.Context, folder string, q store.ListQuery) ([]*mail.Envelope, int, error) {
+	q.Conversations = false
+	return e.store.Page(e.cfg.Name, folder, q)
+}
+
 // FetchBody reads the stored body, or downloads it (and keeps it).
 func (e *MicrosoftEngine) FetchBody(ctx context.Context, folder, id string) (*mail.Message, error) {
 	env, known := e.store.Envelope(e.cfg.Name, folder, id)
@@ -551,6 +557,20 @@ func (e *MicrosoftEngine) ModifyLabels(ctx context.Context, _ string, id string,
 // --- search ---
 
 // Search runs an Outlook search over the whole mailbox. Nothing is stored.
+// SearchPage is one page of an Outlook search; cursor is the next page's
+// link. Outlook does not say how many match.
+func (e *MicrosoftEngine) SearchPage(ctx context.Context, _ string, query, cursor string) (SearchResult, error) {
+	msgs, next, err := e.api.SearchPage(ctx, query, cursor)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	rows := make([]*mail.Envelope, 0, len(msgs))
+	for _, m := range msgs {
+		rows = append(rows, e.envelopeOf(m))
+	}
+	return SearchResult{Rows: rows, Next: next}, nil
+}
+
 func (e *MicrosoftEngine) Search(ctx context.Context, _ string, query string) ([]*mail.Envelope, error) {
 	msgs, err := e.api.Search(ctx, query)
 	if err != nil {

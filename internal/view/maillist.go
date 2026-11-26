@@ -18,13 +18,44 @@ type MailListView struct {
 	visible      []*mail.Envelope // rows on screen: allEnvelopes narrowed by filter
 	filter       string
 	search       string // the server search the rows answer, or ""
-	dateFormat   string
-	self         string // the owner's address: "me" among participants
-	onSelect     func(*mail.Envelope)
-	marked       map[string]bool // IDs of the messages picked for m and d
-	onMarks      func()          // called when the marks change
-	focusFunc    func()
-	blurFunc     func()
+	// The server search's title: its kind ("Gmail"), how many match
+	// (searchTotal; 0: not said, searchEstimate: Gmail's estimate),
+	// whether more pages follow, and what it is doing (searchBusy; with
+	// searchPending, its first page is not here yet).
+	searchKind                 string
+	searchTotal                int
+	searchEstimate, searchMore bool
+	searchBusy                 string
+	searchPending              bool
+	dateFormat                 string
+	self                       string // the owner's address: "me" among participants
+	onSelect                   func(*mail.Envelope)
+	marked                     map[string]bool // IDs of the messages picked for m and d
+	onMarks                    func()          // called when the marks or the rows change
+	// conversations: the rows are conversations (the title's count says so).
+	conversations bool
+	// listed: the rows come from the engine's Lister, already filtered over
+	// the whole folder, a page at a time; the list does not filter them
+	// again. total is the folder's (or the filter's) count, unread the
+	// folder's unread count, for the title.
+	listed        bool
+	total, unread int
+	// rowsFor is the filter text the loaded rows answer (listed mode).
+	// While the text differs — typed, its answer not here yet — the loaded
+	// rows are narrowed to it locally, so nothing that does not match can
+	// be seen or selected.
+	rowsFor string
+	// allMarked: the marks are exactly what MarkAll gave (A); A again
+	// selects none.
+	allMarked bool
+	// extra are the envelopes MarkAll marked beyond the loaded rows, so
+	// actions reach them and a refresh that loads fewer rows keeps their
+	// marks; extraOrder keeps their order.
+	extra      map[string]*mail.Envelope
+	extraOrder []string
+	nearEnd    func() // called when the cursor reaches the last row
+	focusFunc  func()
+	blurFunc   func()
 }
 
 // NewMailListView creates the email list table.
@@ -44,10 +75,14 @@ func NewMailListView(skin *ui.Skin, dateFormat string, onSelect func(*mail.Envel
 		dateFormat: dateFormat,
 		onSelect:   onSelect,
 		marked:     map[string]bool{},
+		extra:      map[string]*mail.Envelope{},
 	}
 	table.SetSelectionChangedFunc(func(row, col int) {
 		if row >= 0 && row < len(mlv.visible) && mlv.onSelect != nil {
 			mlv.onSelect(mlv.visible[row])
+		}
+		if mlv.nearEnd != nil && len(mlv.visible) > 0 && row == len(mlv.visible)-1 {
+			mlv.nearEnd()
 		}
 	})
 	return mlv
@@ -126,7 +161,8 @@ func (mlv *MailListView) rowAt(y int) int {
 	return row
 }
 
-// SetMarksChangedFunc registers a callback invoked whenever the marks change.
+// SetMarksChangedFunc registers a callback invoked whenever the marks or the
+// rows on screen change (the title counts both).
 func (mlv *MailListView) SetMarksChangedFunc(fn func()) { mlv.onMarks = fn }
 
 // ToggleMark marks the message on row, or unmarks it if it is marked.
@@ -135,6 +171,7 @@ func (mlv *MailListView) ToggleMark(row int) {
 		return
 	}
 	id := mlv.visible[row].ID
+	mlv.allMarked = false
 	if mlv.marked[id] {
 		delete(mlv.marked, id)
 	} else {
@@ -157,26 +194,82 @@ func (mlv *MailListView) MarkCursor() {
 	}
 }
 
-// Marked returns the marked messages on screen, in list order. A marked
-// message the filter hides is left out: m and d act on what is shown.
+// Marked returns the marked messages on screen, in list order, then the
+// marked ones not loaded yet (MarkAll). A marked message the filter hides
+// is left out: actions reach what the list shows or would show.
 func (mlv *MailListView) Marked() []*mail.Envelope {
 	var out []*mail.Envelope
+	shown := make(map[string]bool, len(mlv.visible))
 	for _, env := range mlv.visible {
+		shown[env.ID] = true
 		if mlv.marked[env.ID] {
+			out = append(out, env)
+		}
+	}
+	for _, id := range mlv.extraOrder {
+		if env, ok := mlv.extra[id]; ok && !shown[id] && mlv.marked[id] {
 			out = append(out, env)
 		}
 	}
 	return out
 }
 
+// MarksBeyondLoaded reports whether a marked message is not loaded (A over
+// a whole folder or filter).
+func (mlv *MailListView) MarksBeyondLoaded() bool {
+	loaded := make(map[string]bool, len(mlv.allEnvelopes))
+	for _, env := range mlv.allEnvelopes {
+		loaded[env.ID] = true
+	}
+	for id := range mlv.extra {
+		if mlv.marked[id] && !loaded[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// MarkAll marks envs: the rows the list shows and, for those not loaded,
+// their envelopes, so actions reach them too.
+func (mlv *MailListView) MarkAll(envs []*mail.Envelope) {
+	loaded := make(map[string]bool, len(mlv.allEnvelopes))
+	for _, env := range mlv.allEnvelopes {
+		loaded[env.ID] = true
+	}
+	mlv.allMarked = true
+	for _, env := range envs {
+		mlv.marked[env.ID] = true
+		if !loaded[env.ID] {
+			if _, ok := mlv.extra[env.ID]; !ok {
+				mlv.extraOrder = append(mlv.extraOrder, env.ID)
+			}
+			mlv.extra[env.ID] = env
+		}
+	}
+	mlv.Redraw()
+	mlv.marksChanged()
+}
+
+// dropExtra forgets the marks of messages that are not loaded.
+func (mlv *MailListView) dropExtra() {
+	for id := range mlv.extra {
+		delete(mlv.marked, id)
+	}
+	mlv.extra = map[string]*mail.Envelope{}
+	mlv.extraOrder = nil
+	mlv.allMarked = false
+}
+
 // Unmark drops the marks of the messages with ids.
 func (mlv *MailListView) Unmark(ids ...string) {
 	changed := false
+	mlv.allMarked = false
 	for _, id := range ids {
 		if mlv.marked[id] {
 			delete(mlv.marked, id)
 			changed = true
 		}
+		delete(mlv.extra, id)
 	}
 	if changed {
 		mlv.Redraw()
@@ -190,6 +283,9 @@ func (mlv *MailListView) ClearMarks() {
 		return
 	}
 	mlv.marked = map[string]bool{}
+	mlv.extra = map[string]*mail.Envelope{}
+	mlv.extraOrder = nil
+	mlv.allMarked = false
 	mlv.Redraw()
 	mlv.marksChanged()
 }
@@ -210,7 +306,7 @@ func (mlv *MailListView) pruneMarks() {
 		present[env.ID] = true
 	}
 	for id := range mlv.marked {
-		if !present[id] {
+		if _, unloaded := mlv.extra[id]; !present[id] && !unloaded {
 			delete(mlv.marked, id)
 		}
 	}
@@ -222,6 +318,11 @@ func (mlv *MailListView) SetEnvelopes(envelopes []*mail.Envelope) {
 	mlv.allEnvelopes = mail.NewestFirst(envelopes)
 	mlv.filter = ""
 	mlv.marked = map[string]bool{}
+	mlv.extra = map[string]*mail.Envelope{}
+	mlv.extraOrder = nil
+	mlv.allMarked = false
+	mlv.rowsFor = ""
+	mlv.total, mlv.unread = 0, 0
 	mlv.renderEnvelopes(mlv.allEnvelopes)
 }
 
@@ -245,14 +346,86 @@ func (mlv *MailListView) ReplaceEnvelopes(envelopes []*mail.Envelope, keepID str
 
 // SetFilter narrows the list to messages whose sender name, sender address
 // or subject contains query, case-insensitively. An empty query shows all.
+//
+// For a listed folder the rows already are the matches (the engine filters
+// the whole folder): the text is kept for the title, and the new rows
+// follow. A changed filter drops the marks of messages not loaded.
 func (mlv *MailListView) SetFilter(query string) {
+	if query != mlv.filter {
+		mlv.dropExtra()
+	}
 	mlv.filter = query
 	mlv.renderEnvelopes(mlv.filtered(query))
 }
 
+// SetListed says the rows come from the engine's Lister: filtered over the
+// whole folder and loaded a page at a time.
+func (mlv *MailListView) SetListed(on bool) { mlv.listed = on }
+
+// SetRowsFor says which filter text the next rows answer (listed mode):
+// they are shown as they come, without narrowing them again.
+func (mlv *MailListView) SetRowsFor(filter string) { mlv.rowsFor = filter }
+
+// AllMarked reports whether the marks are what MarkAll (A) gave.
+func (mlv *MailListView) AllMarked() bool { return mlv.allMarked && len(mlv.marked) > 0 }
+
+// Listed reports whether the rows come from the engine's Lister.
+func (mlv *MailListView) Listed() bool { return mlv.listed }
+
+// SetTotals gives the title the folder's count (or, with a filter, how many
+// match) and the folder's unread count.
+func (mlv *MailListView) SetTotals(total, unread int) {
+	mlv.total, mlv.unread = total, unread
+}
+
+// Total is the count SetTotals gave: the folder's, or the filter's matches.
+func (mlv *MailListView) Total() int { return mlv.total }
+
+// LoadedCount is how many rows are loaded.
+func (mlv *MailListView) LoadedCount() int { return len(mlv.allEnvelopes) }
+
+// SetNearEndFunc registers fn, called when the cursor reaches the last row.
+func (mlv *MailListView) SetNearEndFunc(fn func()) { mlv.nearEnd = fn }
+
+// AppendEnvelopes adds the next page of rows below; rows already loaded are
+// skipped. The cursor and the marks stay.
+func (mlv *MailListView) AppendEnvelopes(envelopes []*mail.Envelope) {
+	have := make(map[string]bool, len(mlv.allEnvelopes))
+	for _, env := range mlv.allEnvelopes {
+		have[env.ID] = true
+	}
+	added := false
+	for _, env := range envelopes {
+		if !have[env.ID] {
+			have[env.ID] = true
+			mlv.allEnvelopes = append(mlv.allEnvelopes, env)
+			added = true
+		}
+	}
+	if !added {
+		return
+	}
+	mlv.allEnvelopes = mail.NewestFirst(mlv.allEnvelopes)
+	// Rows sort by date, so a new one may land above the cursor: keep the
+	// cursor on the message, not the row number.
+	row, _ := mlv.GetSelection()
+	var at string
+	if row >= 0 && row < len(mlv.visible) {
+		at = mlv.visible[row].ID
+	}
+	visible := mlv.filtered(mlv.filter)
+	for i, env := range visible {
+		if env.ID == at {
+			row = i
+			break
+		}
+	}
+	mlv.renderEnvelopesAt(visible, row)
+}
+
 // filtered returns the envelopes that match query ("" matches all).
 func (mlv *MailListView) filtered(query string) []*mail.Envelope {
-	if query == "" {
+	if query == "" || (mlv.listed && mlv.rowsFor == query) {
 		return mlv.allEnvelopes
 	}
 	q := strings.ToLower(query)
@@ -292,27 +465,144 @@ func (mlv *MailListView) FilterQuery() string { return mlv.filter }
 // VisibleCount returns the number of messages on screen.
 func (mlv *MailListView) VisibleCount() int { return len(mlv.visible) }
 
-// TitleText returns the pane title, including the active filter and the
-// number of marked messages, if any.
-func (mlv *MailListView) TitleText() string {
-	title := mlv.baseTitle()
-	if n := len(mlv.Marked()); n > 0 {
-		title += fmt.Sprintf(" [%d selected]", n)
-	}
-	return title
-}
+// SetConversations says whether the rows are conversations (Gmail), which
+// the title's count names.
+func (mlv *MailListView) SetConversations(on bool) { mlv.conversations = on }
 
-func (mlv *MailListView) baseTitle() string {
-	if mlv.search != "" {
-		if mlv.filter != "" {
-			return "SEARCH: " + mlv.search + " </" + mlv.filter + ">"
+// TitleText returns the pane title: what the list shows (the folder, a
+// filter, a server search), how many rows of how many, the folder's unread
+// count, the selection and what a search is doing. A filter and a search
+// share one layout:
+//
+//	MAIL LIST [50 of 2,431 conversations · 131 unread · 3 selected]
+//	MAIL LIST: filter /linkedin [50 of 312 · 4 selected]
+//	MAIL LIST: Gmail search \linkedin [searching… ~20–30 s]
+//	MAIL LIST: Gmail search \linkedin [50 of ~1,240 · loading more… ~20–30 s]
+//	MAIL LIST: Outlook search \linkedin [50 of 50+]
+func (mlv *MailListView) TitleText() string {
+	switch {
+	case mlv.search != "":
+		kind := mlv.searchKind
+		if kind == "" {
+			kind = "server"
 		}
-		return "SEARCH: " + mlv.search
+		head := "MAIL LIST: " + kind + " search \\" + mlv.search
+		if mlv.filter != "" {
+			head += " /" + mlv.filter
+		}
+		return head + " [" + mlv.searchCount() + "]"
+	case mlv.filter != "":
+		return "MAIL LIST: filter /" + mlv.filter + " [" + mlv.withSelected(mlv.of(len(mlv.visible))) + "]"
 	}
-	if mlv.filter == "" {
+	shown := len(mlv.visible)
+	if shown == 0 {
 		return "MAIL LIST"
 	}
-	return "MAIL LIST </" + mlv.filter + ">"
+	noun := "message"
+	if mlv.conversations {
+		noun = "conversation"
+	}
+	if max(shown, mlv.total) != 1 {
+		noun += "s"
+	}
+	count := mlv.of(shown) + " " + noun
+	if mlv.listed && mlv.unread > 0 {
+		count += " · " + thousands(mlv.unread) + " unread"
+	}
+	return "MAIL LIST [" + mlv.withSelected(count) + "]"
+}
+
+// of is "50 of 2,431" when the folder (or the filter) has more than n,
+// else "50".
+func (mlv *MailListView) of(n int) string {
+	if mlv.listed && mlv.total > n {
+		return thousands(n) + " of " + thousands(mlv.total)
+	}
+	return thousands(n)
+}
+
+// withSelected adds the selection count, if any.
+func (mlv *MailListView) withSelected(count string) string {
+	if n := len(mlv.Marked()); n > 0 {
+		count += " · " + thousands(n) + " selected"
+	}
+	return count
+}
+
+// searchCount is a server search's count: "searching… ~20–30 s" while the
+// first page is on its way, then "50 of ~1,240" (Gmail's estimate), "50 of
+// 87" (IMAP) or "50 of 50+" (Outlook, more to come), then what is loading.
+func (mlv *MailListView) searchCount() string {
+	if mlv.searchBusy != "" && mlv.searchPending {
+		return mlv.searchBusy
+	}
+	shown, loaded := len(mlv.visible), len(mlv.allEnvelopes)
+	count := thousands(shown)
+	switch {
+	case mlv.searchTotal > loaded:
+		total := thousands(mlv.searchTotal)
+		if mlv.searchEstimate {
+			total = "~" + total
+		}
+		count += " of " + total
+	case mlv.searchMore:
+		count += " of " + thousands(loaded) + "+"
+	}
+	count = mlv.withSelected(count)
+	if mlv.searchBusy != "" {
+		count += " · " + mlv.searchBusy
+	}
+	return count
+}
+
+// SetSearchInfo gives the title a server search's kind ("Gmail", "IMAP",
+// "Outlook"), how many match in all (0: not said), whether that is an
+// estimate, and whether more pages follow.
+func (mlv *MailListView) SetSearchInfo(kind string, total int, estimate, more bool) {
+	mlv.searchKind, mlv.searchTotal, mlv.searchEstimate, mlv.searchMore = kind, total, estimate, more
+}
+
+// SetSearchBusy says in the title what the search is doing ("" for
+// nothing); pending: its first page is not here yet, so the rows on screen
+// are not its answer.
+func (mlv *MailListView) SetSearchBusy(text string, pending bool) {
+	mlv.searchBusy, mlv.searchPending = text, pending
+}
+
+// thousands writes n with a comma between each group of three digits.
+func thousands(n int) string {
+	s := fmt.Sprint(n)
+	if n < 0 {
+		return s
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
+// ToggleMarkAll marks every message on screen (a filter's matches only),
+// or, when all of them are marked already, unmarks them.
+func (mlv *MailListView) ToggleMarkAll() {
+	if len(mlv.visible) == 0 {
+		return
+	}
+	all := true
+	for _, env := range mlv.visible {
+		if !mlv.marked[env.ID] {
+			all = false
+			break
+		}
+	}
+	for _, env := range mlv.visible {
+		if all {
+			delete(mlv.marked, env.ID)
+		} else {
+			mlv.marked[env.ID] = true
+		}
+	}
+	mlv.Redraw()
+	mlv.marksChanged()
 }
 
 func (mlv *MailListView) renderEnvelopes(envelopes []*mail.Envelope) {
@@ -331,6 +621,7 @@ func (mlv *MailListView) renderEnvelopesAt(envelopes []*mail.Envelope, row int) 
 	} else if mlv.onSelect != nil {
 		mlv.onSelect(nil) // nothing on screen: nothing is selected
 	}
+	mlv.marksChanged() // the title counts the rows
 }
 
 // markSign is the sign of a marked row; it takes the place of the read and

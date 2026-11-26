@@ -58,6 +58,7 @@ with `[` / `]`.
   - [Deleting in Deleted Items](#deleting-in-deleted-items)
   - [`:` command prompt](#-command-prompt)
   - [`/` filter](#-filter)
+  - [`\` server search](#-server-search)
   - [Mail list order](#mail-list-order)
   - [Reading a message in the browser](#reading-a-message-in-the-browser)
   - [Attachments](#attachments)
@@ -114,6 +115,14 @@ RSRV:     Dovecot / -         <S>   Sync                      <o> Open
 - **Mail list / preview** (right) — a message is marked as read when you move
   onto it in the mail list (its `●` goes at once), not while you browse
   folders. `u` marks it unread again.
+- **Long folders** — the list loads the newest 50 messages (or Gmail
+  conversations), and the next 50 when the cursor reaches the last row. The
+  title says how many are loaded of how many the folder has, and how many are
+  unread: `MAIL LIST [50 of 2,431 conversations · 131 unread]`; the `of …`
+  goes once everything is loaded. New mail and syncs refresh the list in
+  place, keeping as many rows as you loaded. (IMAP: the unfiltered first page
+  comes from the server; further pages and the filter come from the local
+  copy.)
 - **Resizing the preview** — drag the border between the mail list and the
   preview up or down with the mouse. The size you leave is remembered in
   `~/.local/state/m9s/layout.json` and used next time; `ui.mail_list_rows`
@@ -501,7 +510,7 @@ Passwords are looked up once, at startup; after changing one, restart m9s.
   `\Flagged` flag;
   `a` archives to `folders.archive`, else the server's `\Archive` folder,
   else one called `Archive`; `m` moves to another folder.
-- `/` filters the list as you type; `enter` then runs a text search on the
+- `/` filters the whole folder as you type; `\` runs a text search on the
   server; `esc` returns to the folder.
 - Sending goes out over SMTP; a server draft is replaced when you edit it.
 
@@ -605,9 +614,9 @@ If login says the client entry is not found, set that entry's URL to
 - `enter` on a conversation opens it; `tab` / `shift-tab` move between its
   messages and `enter` expands or collapses one.
 - `L` opens the label picker (Gmail labels; Outlook categories on a Microsoft account).
-- `/` filters the list as you type; `enter` then searches the server
-  (Gmail search syntax such as `from:alice has:attachment`); `esc` returns to
-  the folder.
+- `/` filters the whole label as you type; `\` searches the server (Gmail
+  search syntax such as `from:alice has:attachment`); `esc` returns to the
+  folder.
 - `a` archives the selected conversation: it takes the Inbox label off every
   message in it and keeps their other labels. `m` moves it to another label.
 - New mail is checked every 30 seconds (`badge_poll`).
@@ -800,8 +809,8 @@ shows whether the account is signed in. After
 - `L` opens the category picker; a message's categories show in the reader
   and preview as `Categories: Work, Travel`. m9s does not create categories:
   make them in Outlook.
-- `/` filters the list as you type; `enter` then runs an Outlook search on
-  the server (`from:bob subject:"q3 report"`); `esc` returns to the folder.
+- `/` filters the whole folder as you type; `\` runs an Outlook search on the
+  server (`from:bob subject:"q3 report"`); `esc` returns to the folder.
 - Sent mail is filed in Sent Items by Microsoft; a server draft is deleted
   once it is sent.
 
@@ -818,7 +827,8 @@ These work from every pane:
 | `tab` | Cycle focus between panes |
 | `[` / `]` | Switch to previous / next account |
 | `:` | Command prompt: switch to an account or folder by name; `:help` lists every shortcut |
-| `/` | Filter the mail list |
+| `/` | Filter the whole folder, in the local copy (see [`/` filter](#-filter)) |
+| `\` | Search the server (see [`\` server search](#-server-search)) |
 | `enter` | Open the folder under the cursor; on a Gmail conversation, open it in the reader |
 | `L` | Labels (Gmail) or categories (Outlook) of the selected message: pick them in a list |
 | `c` | Compose new message |
@@ -826,7 +836,8 @@ These work from every pane:
 | `f` | Forward the selected message (its text; see below) |
 | `d` | Delete the selected message (moves it to Deleted Items; in Deleted Items, see below) |
 | `m` | Move the selected message (or conversation) to another folder |
-| `space` | Select / unselect the message under the cursor for `m` and `d` (see below) |
+| `space` | Select / unselect the message under the cursor for `m`, `d`, `a`, `u` and `*` (see below) |
+| `A` | Select every message of the folder, or every match of the filter, loaded or not; again: select none |
 | `a` | Archive the selected message (or conversation) |
 | `*` | Star / unstar the selected message (or conversation) |
 | `u` | Mark the selected message (or conversation) unread |
@@ -878,16 +889,41 @@ lists them all.
 
 In the mail list, `space` selects the message under the cursor (and moves
 to the next one); `space` again unselects it. A click with `shift` (or
-`ctrl` / `alt`) held selects or unselects the clicked message. Selected
-messages show `✓` and the title counts them (`MAIL LIST [3 selected]`).
+`ctrl` / `alt`) held selects or unselects the clicked message. `A` selects
+every message the list would show if you scrolled to the end: every match of
+the filter, or the whole folder without one — loaded or not. On the answer to
+a server search (`\`) it selects the results loaded so far. `A` again, once
+all of them are selected, selects none. Selected messages show `✓`.
 
-With messages selected, `m` moves all of them to the chosen folder and `d`
-asks once to move all of them to the trash. In the trash, `d` asks to delete
-them for good; that prompt starts on **Cancel**. On Gmail, conversation rows
-are moved or trashed as whole conversations, as with a single `m` or `d`.
+The title counts the selection too:
+`MAIL LIST: filter /invoice [50 of 412 · 412 selected]`
+(`conversations` on a Gmail label).
+
+With messages selected:
+
+| Key | Acts on all selected messages |
+|-----|-------------------------------|
+| `m` | moves them to the chosen folder |
+| `d` | asks once, then moves them to the trash; in the trash it asks to delete them for good, and that prompt starts on **Cancel** |
+| `a` | archives them |
+| `u` | marks them unread |
+| `*` | stars them; if every one is starred already, removes the star |
+
+When the selection holds messages that are not loaded (after `A` on a long
+folder or filter), `a`, `u` and `*` ask first, naming the count
+(`Archive 412 conversations?`); `d` always asks, and `m` names the count in
+its folder picker.
+
+On Gmail, conversation rows change as whole conversations, as with a
+single `m`, `d`, `a`, `u` or `*`. After `u` and `*` the messages stay
+selected, ready for the next action; after `m`, `d` and `a` they leave the
+list.
 `esc` clears the selection; so does opening another folder. While a filter
-is on, only the selected messages it shows are acted on. Messages that fail
-stay selected, and the status bar says how many.
+is on, only the selected messages it matches are acted on; changing the
+filter drops the ones `A` selected beyond the loaded rows. While an action on
+the selection runs, the status bar says so (`Archiving 412 conversations…`)
+and another one waits until it is done. Messages that fail stay selected, and
+the status bar says how many.
 
 Terminals keep some modifier clicks for themselves: `cmd`-click is never
 passed to programs on macOS, and many terminals (kitty, Ghostty, iTerm2
@@ -918,13 +954,46 @@ quits. `esc` cancels.
 
 ### `/` filter
 
-The mail list narrows as you type to messages whose sender (name or address)
-or subject contains the text. `enter` keeps the filter, moves to the mail
-list and also sends the text to the server as a search (Gmail search syntax on
-Gmail, Outlook search on Microsoft, text search on IMAP); `esc` — in the prompt, or later in the mail list —
-leaves the search and clears the filter. While you type, the filter applies
-only to the messages already loaded (the newest 50). It is dropped when you
-open another folder or account.
+As you type (once you pause, 150 ms), the list shows the messages of the
+whole folder whose sender (name or address) or subject contains the text,
+ignoring case in any script — the first 50, and more as you scroll; the title
+counts them: `MAIL LIST: filter /invoice [50 of 412]`. On Gmail a
+conversation shows when any of its messages matches. The text is searched in
+the local copy, so it works offline; on an IMAP account whose first copy is
+still running, very old mail joins once that finishes. Until the folder's
+answer to what you typed arrives, the rows already loaded are narrowed to it,
+so nothing that does not match is shown or acted on.
+
+`enter` keeps the filter and moves to the mail list; the server is not asked
+(that is `\`). `esc` — in the prompt, or later in the mail list — clears the
+filter. It is dropped when you open another folder or account. Gmail's All
+Mail, which is listed live rather than kept locally, filters only the
+conversations it shows.
+
+### `\` server search
+
+`\` opens the search bar at the bottom (`\linkedin`); `enter` sends the text
+to the server: Gmail search syntax on Gmail (`from:alice has:attachment`),
+Outlook search on Microsoft (`from:bob subject:"q3 report"`), a text search on
+IMAP. Unlike the filter it also finds words in the message bodies.
+
+The title has the filter's layout, with the kind of search and its count:
+
+| Title | Means |
+|-------|-------|
+| `MAIL LIST: Gmail search \linkedin [searching… ~20–30 s]` | the first 50 are on their way |
+| `MAIL LIST: Gmail search \linkedin [50 of ~1,240]` | 50 loaded; Gmail estimates about 1,240 |
+| `MAIL LIST: IMAP search \linkedin [50 of 87]` | the IMAP server counts exactly |
+| `MAIL LIST: Outlook search \linkedin [50 of 50+]` | Outlook has more but does not say how many |
+| `… [50 of ~1,240 · loading more… ~20–30 s]` | the next 50 are on their way |
+
+The status bar says the same (`searching Gmail for "linkedin"… (about
+20–30 s)`). A Gmail page takes that long because Gmail reads each
+conversation it finds — about 2,000–3,000 of your quota units a page, at 85 a
+second; IMAP and Outlook answer in a moment. Reaching the last row loads the
+next 50. `/` then narrows the results loaded. `esc` returns to the folder
+(and cancels a search still on its way). An account that cannot search says
+`server search: not available for this account`.
 
 ### Mail list order
 

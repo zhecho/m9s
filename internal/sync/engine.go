@@ -573,6 +573,26 @@ func (e *Engine) FetchHeaders(ctx context.Context, folder string, page, pageSize
 	return e.cmdConn.FetchHeaders(ctx, folder, page, pageSize)
 }
 
+// List pages a folder. The unfiltered first page comes from the server, as
+// FetchHeaders does, so new mail shows at once; filtered pages, later pages
+// and "all" come from the local copy (the mirror). Without a local copy the
+// folder is not listable.
+func (e *Engine) List(ctx context.Context, folder string, q store.ListQuery) ([]*mail.Envelope, int, error) {
+	if e.store == nil {
+		return nil, 0, ErrNotListable
+	}
+	q.Conversations = false
+	if q.Filter == "" && q.Offset == 0 && q.Limit > 0 {
+		rows, err := e.cmdConn.FetchHeaders(ctx, folder, 1, max(q.Limit, store.ListSize))
+		if err != nil {
+			return nil, 0, err
+		}
+		_, total, _ := e.store.Page(e.cfg.Name, folder, store.ListQuery{Limit: 1})
+		return rows, max(total, len(rows)), nil
+	}
+	return e.store.Page(e.cfg.Name, folder, q)
+}
+
 // parseUID turns a message id back into the IMAP UID it was made from.
 func parseUID(id string) (uint32, error) {
 	uid, err := strconv.ParseUint(id, 10, 32)
@@ -611,24 +631,36 @@ func (e *Engine) SetFlags(ctx context.Context, folder, id string, flags []string
 // message text) in folder and returns the newest store.ListSize matches,
 // newest first.
 func (e *Engine) Search(ctx context.Context, folder, query string) ([]*mail.Envelope, error) {
+	res, err := e.SearchPage(ctx, folder, query, "")
+	return res.Rows, err
+}
+
+// SearchPage is one page of Search: cursor is how many newer matches come
+// before it ("" for the first page). IMAP lists every match, so the total
+// is exact.
+func (e *Engine) SearchPage(ctx context.Context, folder, query, cursor string) (SearchResult, error) {
+	offset, _ := strconv.Atoi(cursor)
 	uids, err := e.cmdConn.Search(ctx, folder, imapadapter.BuildSearchCriteria(query))
 	if err != nil {
-		return nil, err
+		return SearchResult{}, err
 	}
-	if len(uids) == 0 {
-		return nil, nil
+	res := SearchResult{Total: len(uids)}
+	if offset >= len(uids) {
+		return res, nil
 	}
 	uids = slices.Clone(uids)
 	slices.SortFunc(uids, func(a, b uint32) int { return cmpDesc(a, b) })
-	if len(uids) > store.ListSize {
-		uids = uids[:store.ListSize]
+	end := min(offset+store.ListSize, len(uids))
+	if end < len(uids) {
+		res.Next = strconv.Itoa(end)
 	}
-	envs, err := e.cmdConn.FetchEnvelopes(ctx, folder, uids)
+	envs, err := e.cmdConn.FetchEnvelopes(ctx, folder, uids[offset:end])
 	if err != nil {
-		return nil, err
+		return SearchResult{}, err
 	}
 	slices.SortFunc(envs, func(a, b *mail.Envelope) int { return cmpDesc(a.UID, b.UID) })
-	return envs, nil
+	res.Rows = envs
+	return res, nil
 }
 
 func cmpDesc(a, b uint32) int {

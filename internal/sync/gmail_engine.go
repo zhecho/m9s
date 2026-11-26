@@ -166,6 +166,22 @@ func (e *GmailEngine) FetchHeaders(_ context.Context, folder string, page, pageS
 	return envs, nil
 }
 
+// List pages a label from the store (conversations where the label shows
+// them), filtered over the whole label. All Mail is not stored.
+func (e *GmailEngine) List(_ context.Context, folder string, q store.ListQuery) ([]*mail.Envelope, int, error) {
+	if e.isAllMail(folder) {
+		return nil, 0, ErrNotListable
+	}
+	q.Conversations = ShowsConversations(e, folder)
+	rows, total, err := e.store.Page(e.cfg.Name, folder, q)
+	if q.Conversations {
+		for _, env := range rows {
+			e.describeThread(env)
+		}
+	}
+	return rows, total, err
+}
+
 // FetchBody reads the stored body, or downloads it (and keeps it).
 func (e *GmailEngine) FetchBody(ctx context.Context, folder, id string) (*mail.Message, error) {
 	env, known := e.store.Envelope(e.cfg.Name, folder, id)

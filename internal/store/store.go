@@ -28,10 +28,10 @@ import (
 // ListSize is how many of a folder's newest messages the mail list shows.
 const ListSize = 50
 
-// schemaVersion is bumped whenever the tables change. A version-2, -3 or
-// -4 index is migrated in place (migrate.go); any other older index is
+// schemaVersion is bumped whenever the tables change. A version-2 to -5
+// index is migrated in place (migrate.go); any other older index is
 // emptied and filled again from the server.
-const schemaVersion = 5
+const schemaVersion = 6
 
 const schema = `
 CREATE TABLE IF NOT EXISTS folder_state (
@@ -65,15 +65,17 @@ const messagesColumns = `
 	data      TEXT    NOT NULL,           -- the envelope as JSON; never changes
 	has_body  INTEGER NOT NULL DEFAULT 0, -- 1: the .eml file is on disk
 	has_attach INTEGER,                   -- from the body: 1 carries files; NULL: not known yet
+	match_text TEXT NOT NULL DEFAULT '',  -- what the filter matches: matchText(envelope)
 	PRIMARY KEY (account, folder, id)
 `
 
 // Store is the local mail copy. A nil *Store holds nothing and forgets
 // everything it is given. Safe for concurrent use.
 type Store struct {
-	mu  sync.Mutex
-	db  *sql.DB
-	dir string // root of the .eml files; "": message content is not kept
+	mu     sync.Mutex
+	closed bool // Close was called: nothing more is written (guarded by mu)
+	db     *sql.DB
+	dir    string // root of the .eml files; "": message content is not kept
 }
 
 // DefaultDir is ~/.local/share/m9s/mail, or under $XDG_DATA_HOME when set.
@@ -156,6 +158,9 @@ func initSchema(db *sql.DB) error {
 		version = 4
 	}
 	if version == 4 && migrateV4(db) == nil {
+		version = 5
+	}
+	if version == 5 && migrateV5(db) == nil {
 		version = schemaVersion
 	}
 	if version != 0 && version != schemaVersion {
@@ -177,6 +182,9 @@ func (s *Store) Close() error {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
 	return s.db.Close()
 }
 
@@ -423,10 +431,10 @@ func (s *Store) upsert(tx *sql.Tx, account, folder string, list []*mail.Envelope
 		if s.hasSharedBody(account, id) {
 			hasBody = 1
 		}
-		if _, err := tx.Exec(`INSERT INTO messages (account, folder, id, sort_key, thread_id, flags, data, has_body) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		if _, err := tx.Exec(`INSERT INTO messages (account, folder, id, sort_key, thread_id, flags, data, has_body, match_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (account, folder, id) DO UPDATE SET sort_key = excluded.sort_key, thread_id = excluded.thread_id,
-				flags = excluded.flags, data = excluded.data`,
-			account, folder, id, sortKey, thread, string(flagsJSON), string(data), hasBody); err != nil {
+				flags = excluded.flags, data = excluded.data, match_text = excluded.match_text`,
+			account, folder, id, sortKey, thread, string(flagsJSON), string(data), hasBody, matchText(env)); err != nil {
 			return wrap(err)
 		}
 	}
@@ -473,35 +481,76 @@ func (s *Store) Threads(account, folder string) []*mail.Envelope {
 	}
 	rows.Close()
 
-	var out []*mail.Envelope
-	for _, k := range keys {
-		members, err := s.queryEnvelopes(`SELECT `+envelopeColumns+` FROM messages
-			WHERE account = ? AND folder = ? AND `+threadKey+` = ? ORDER BY sort_key DESC, id DESC`, account, folder, k)
-		if err != nil || len(members) == 0 {
-			continue
-		}
-		latest := members[0]
-		unread, flagged, files := false, false, false
-		for _, m := range members {
-			unread = unread || m.IsUnread()
-			flagged = flagged || m.IsFlagged()
-			files = files || m.HasAttach
-		}
-		latest.HasAttach = files
-		if unread {
-			latest.Flags = slices.DeleteFunc(latest.Flags, func(f string) bool { return f == `\Seen` })
-		}
-		if flagged && !latest.IsFlagged() {
-			latest.Flags = append(latest.Flags, `\Flagged`)
-		}
-		if len(latest.Flags) == 0 {
-			latest.Flags = nil
-		}
-		latest.ThreadCount = len(members)
-		out = append(out, latest)
-	}
+	out := s.threadRows(account, folder, keys)
 	slices.Reverse(out)
 	return out
+}
+
+// threadRows are the list rows of the conversations with keys in folder,
+// in the order of keys: each the envelope of its latest message with
+// ThreadCount set, unread if any of its messages is unread, flagged if any
+// is, with files if any has them. A key with no messages gives no row. The
+// members are read in a few indexed queries, not one scan per conversation.
+// s.mu is held.
+func (s *Store) threadRows(account, folder string, keys []string) []*mail.Envelope {
+	var tids, mids []any
+	for _, k := range keys {
+		if id, ok := strings.CutPrefix(k, "t:"); ok {
+			tids = append(tids, id)
+		} else if id, ok := strings.CutPrefix(k, "m:"); ok {
+			mids = append(mids, id)
+		}
+	}
+	members := map[string][]*mail.Envelope{}
+	collect := func(cond string, ids []any, key func(*mail.Envelope) string) {
+		for chunk := range slices.Chunk(ids, 400) {
+			marks := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+			args := append([]any{account, folder}, chunk...)
+			envs, err := s.queryEnvelopes(`SELECT `+envelopeColumns+` FROM messages
+				WHERE account = ? AND folder = ? AND `+cond+` IN (`+marks+`) ORDER BY sort_key DESC, id DESC`, args...)
+			if err != nil {
+				continue
+			}
+			for _, env := range envs {
+				members[key(env)] = append(members[key(env)], env)
+			}
+		}
+	}
+	collect("thread_id", tids, func(e *mail.Envelope) string { return "t:" + e.ThreadID })
+	collect("thread_id IS NULL AND id", mids, func(e *mail.Envelope) string { return "m:" + e.ID })
+	out := make([]*mail.Envelope, 0, len(keys))
+	for _, k := range keys {
+		if row := threadRowOf(members[k]); row != nil {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// threadRowOf builds a conversation's row from its messages, newest first.
+func threadRowOf(members []*mail.Envelope) *mail.Envelope {
+	if len(members) == 0 {
+		return nil
+	}
+	latest := members[0]
+	unread, flagged, files := false, false, false
+	for _, m := range members {
+		unread = unread || m.IsUnread()
+		flagged = flagged || m.IsFlagged()
+		files = files || m.HasAttach
+	}
+	latest.HasAttach = files
+	if unread {
+		latest.Flags = slices.DeleteFunc(latest.Flags, func(f string) bool { return f == `\Seen` })
+	}
+	if flagged && !latest.IsFlagged() {
+		latest.Flags = append(latest.Flags, `\Flagged`)
+	}
+	if len(latest.Flags) == 0 {
+		latest.Flags = nil
+	}
+	latest.ThreadCount = len(members)
+	return latest
 }
 
 // ThreadEnvelopes returns every stored message of a conversation, from any
@@ -703,6 +752,12 @@ func (s *Store) PutBody(account, folder, id string, raw []byte) error {
 	if s == nil || s.dir == "" {
 		return nil
 	}
+	files := boolInt(mail.HasFiles(raw))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil // a fetch that finished after Close: nothing more is written
+	}
 	path := s.bodyPath(account, folder, id)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return wrap(err)
@@ -714,9 +769,6 @@ func (s *Store) PutBody(account, folder, id string, raw []byte) error {
 	if err := os.Rename(tmp, path); err != nil { // never a half-written message
 		return wrap(err)
 	}
-	files := boolInt(mail.HasFiles(raw))
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	where, args := rowsOf(account, folder, id)
 	_, err := s.db.Exec("UPDATE messages SET has_body = 1, has_attach = ? WHERE "+where, append([]any{files}, args...)...)
 	return wrap(err)

@@ -73,7 +73,7 @@ func TestFilter_enterKeepsAndFocusesList(t *testing.T) {
 	if ra.uiApp.GetFocus() != tview.Primitive(ra.maillist) {
 		t.Error("Enter must move focus to the mail list")
 	}
-	if title := ra.maillist.GetTitle(); !strings.Contains(title, "</bob>") {
+	if title := ra.maillist.GetTitle(); !strings.Contains(title, "filter /bob") {
 		t.Errorf("mail list title = %q, want the filter in it", title)
 	}
 }

@@ -151,12 +151,23 @@ var _ ServerSearch = (*GmailEngine)(nil)
 // a restriction. Rows look like the list's: the newest message stands for
 // the conversation, flags and count from the whole of it. Nothing is
 // written to the store.
-func (e *GmailEngine) Search(ctx context.Context, _ string, query string) ([]*mail.Envelope, error) {
-	ids, _, err := e.api.ListThreads(ctx, query, "")
+func (e *GmailEngine) Search(ctx context.Context, folder string, query string) ([]*mail.Envelope, error) {
+	res, err := e.SearchPage(ctx, folder, query, "")
+	return res.Rows, err
+}
+
+// SearchPage is one page of Search (cursor: Gmail's page token), with
+// Gmail's estimate of how many conversations match.
+func (e *GmailEngine) SearchPage(ctx context.Context, _ string, query, cursor string) (SearchResult, error) {
+	ids, next, estimate, err := e.api.SearchThreads(ctx, query, cursor)
 	if err != nil {
-		return nil, err
+		return SearchResult{}, err
 	}
-	return e.threadRows(ctx, ids)
+	rows, err := e.threadRows(ctx, ids)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	return SearchResult{Rows: rows, Total: estimate, Estimate: true, Next: next}, nil
 }
 
 // threadRows builds a list row for each conversation in ids, as Search and
