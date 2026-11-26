@@ -254,13 +254,7 @@ func (e *GmailEngine) reconcile(ctx context.Context, f syncedFolder) error {
 			gone = append(gone, id)
 			continue
 		}
-		next := slices.DeleteFunc(slices.Clone(flags), func(fl string) bool { return fl == `\Seen` || fl == `\Flagged` })
-		if !isUnread[id] {
-			next = append(next, `\Seen`)
-		}
-		if isStarred[id] {
-			next = append(next, `\Flagged`)
-		}
+		next := listedFlags(flags, isUnread[id], isStarred[id])
 		if !sameFlags(flags, next) {
 			changed[id] = next
 		}
@@ -280,7 +274,27 @@ func (e *GmailEngine) reconcile(ctx context.Context, f syncedFolder) error {
 		// Still record the folder as known, even when it is empty.
 		return e.store.AddMessages(e.cfg.Name, f.name, nil)
 	}
-	for chunk := range slices.Chunk(added, gmailFetchChunk) {
+	have := len(remote) - len(added)
+	progress := func(done bool) bool {
+		return e.emit(ctx, ListingProgress{AccountName: e.cfg.Name, FolderName: f.name,
+			Stored: have, Total: len(remote), Done: done})
+	}
+	if !progress(false) {
+		return ctx.Err()
+	}
+	// A message already stored under another label has the same headers:
+	// they are reused rather than fetched again (20 quota units each).
+	reused, fetch := e.storedElsewhere(added, isUnread, isStarred)
+	for chunk := range slices.Chunk(reused, gmailFetchChunk) {
+		if err := e.store.AddMessages(e.cfg.Name, f.name, chunk); err != nil {
+			return err
+		}
+		have += len(chunk)
+		if have < len(remote) && !progress(false) {
+			return ctx.Err()
+		}
+	}
+	for chunk := range slices.Chunk(fetch, gmailFetchChunk) {
 		metas, _, err := e.fetchMetas(ctx, chunk)
 		if err != nil {
 			return err
@@ -292,8 +306,45 @@ func (e *GmailEngine) reconcile(ctx context.Context, f syncedFolder) error {
 		if err := e.store.AddMessages(e.cfg.Name, f.name, envs); err != nil {
 			return err
 		}
+		have += len(chunk) // a message deleted meanwhile is done with too
+		if have < len(remote) && !progress(false) {
+			return ctx.Err()
+		}
+	}
+	if !progress(true) {
+		return ctx.Err()
 	}
 	return nil
+}
+
+// storedElsewhere splits ids, in order, into the envelopes the store holds
+// under another label — given the flags of this label's listing — and the
+// ids whose headers must be fetched.
+func (e *GmailEngine) storedElsewhere(ids []string, isUnread, isStarred map[string]bool) (reused []*mail.Envelope, fetch []string) {
+	known := e.store.EnvelopesByID(e.cfg.Name, ids)
+	for _, id := range ids {
+		env, ok := known[id]
+		if !ok {
+			fetch = append(fetch, id)
+			continue
+		}
+		env.Flags = listedFlags(env.Flags, isUnread[id], isStarred[id])
+		reused = append(reused, env)
+	}
+	return reused, fetch
+}
+
+// listedFlags is flags with \Seen and \Flagged as a label's unread and
+// starred listings say; other flags (\Draft) stay.
+func listedFlags(flags []string, unread, starred bool) []string {
+	next := slices.DeleteFunc(slices.Clone(flags), func(fl string) bool { return fl == `\Seen` || fl == `\Flagged` })
+	if !unread {
+		next = append(next, `\Seen`)
+	}
+	if starred {
+		next = append(next, `\Flagged`)
+	}
+	return next
 }
 
 func setOf(ids []string) map[string]bool {

@@ -241,6 +241,37 @@ func (s *Store) Envelope(account, folder, id string) (*mail.Envelope, bool) {
 	return env, err == nil
 }
 
+// EnvelopesByID returns the stored headers of the messages ids names that
+// the account holds in any folder, by id. Gmail mirrors a message under
+// every synced label it carries, with the same headers in each.
+func (s *Store) EnvelopesByID(account string, ids []string) map[string]*mail.Envelope {
+	if s == nil {
+		return nil
+	}
+	out := make(map[string]*mail.Envelope)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for chunk := range slices.Chunk(ids, 500) {
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, account)
+		for _, id := range chunk {
+			args = append(args, id)
+		}
+		marks := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		rows, err := s.db.Query("SELECT "+envelopeColumns+" FROM messages WHERE account = ? AND id IN ("+marks+")", args...)
+		if err != nil {
+			return out
+		}
+		for rows.Next() {
+			if env, err := scanEnvelope(rows); err == nil {
+				out[env.ID] = env
+			}
+		}
+		rows.Close()
+	}
+	return out
+}
+
 // scanEnvelope reads the envelopeColumns of a row. Envelopes stored before
 // ids were text carry only a UID; they get their id and sort key from the row.
 func scanEnvelope(row interface{ Scan(...any) error }) (*mail.Envelope, error) {

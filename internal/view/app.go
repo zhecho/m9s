@@ -44,6 +44,14 @@ type RootApp struct {
 	// account's background copy has come.
 	store  *store.Store
 	mirror map[string]msync.MirrorProgress
+	// listing is the last listing report of each account's folders (API
+	// accounts); listReload is when the open list was last reloaded for one.
+	listing    map[string]map[string]msync.ListingProgress
+	listReload time.Time
+	// started is where each running listing or copy began, for the time
+	// left; now is the clock (tests set it).
+	started map[string]progressStart
+	now     func() time.Time
 
 	// testModalDone is set by showSendModal for use in tests.
 	testModalDone func(int, string)
@@ -139,6 +147,7 @@ func NewRootApp(uiApp *ui.App, cfg *config.Config, manager *mail.Manager,
 		engines:    engines,
 		draftStore: draftStore,
 		store:      store.NewMemory(),
+		now:        time.Now,
 	}
 	ra.sendFn = ra.sendDraft
 	ra.openBrowser = openInDefaultBrowser
@@ -332,8 +341,15 @@ func (ra *RootApp) refreshHeader() {
 	info.Server = ra.server[acct.Name]
 	st, known := ra.status[acct.Name]
 	info.Status, info.StatusRole = statusLine(st, known)
-	if p, copying := ra.mirror[acct.Name]; copying && !p.Done && known && st.State == msync.StateConnected {
-		info.Status += fmt.Sprintf(" · saving mail %d/%d", p.Downloaded, p.Messages)
+	if known && st.State == msync.StateConnected {
+		if p, ok := ra.listingShown(acct.Name); ok {
+			info.Status += fmt.Sprintf(" · syncing %s %d/%d (%d%%)", p.FolderName, p.Stored, p.Total, percent(p.Stored, p.Total)) +
+				ra.timeLeft(listingKey(p), p.Stored, p.Total)
+		}
+		if p, copying := ra.mirror[acct.Name]; copying && !p.Done {
+			info.Status += fmt.Sprintf(" · saving mail %d/%d (%d%%)", p.Downloaded, p.Messages, percent(p.Downloaded, p.Messages)) +
+				ra.timeLeft(mirrorKey(p.AccountName), p.Downloaded, p.Messages)
+		}
 	}
 	ra.uiApp.Header.SetInfo(info)
 
@@ -1913,6 +1929,8 @@ func (ra *RootApp) handleEvent(ev msync.Event) {
 		}
 	case msync.MirrorProgress:
 		ra.handleMirrorProgress(e)
+	case msync.ListingProgress:
+		ra.handleListingProgress(e)
 	case msync.MirrorFailed:
 		// The account still works; only the background copy is paused.
 		ui.AppLog.Warn("[%s] saving mail locally paused, resumed shortly: %v", e.AccountName, e.Err)
@@ -1942,12 +1960,79 @@ func (ra *RootApp) handleMirrorProgress(p msync.MirrorProgress) {
 	}
 	prev, seen := ra.mirror[p.AccountName]
 	ra.mirror[p.AccountName] = p
+	ra.trackStart(mirrorKey(p.AccountName), p.Downloaded, p.Done)
 	if p.Done && (!seen || prev.Downloaded != p.Downloaded || prev.Messages != p.Messages) {
 		ui.AppLog.Info("[%s] local copy up to date: %d messages", p.AccountName, p.Messages)
 	}
 	if ra.isActiveAccount(p.AccountName) {
 		ra.refreshHeader()
 	}
+}
+
+// listReloadEvery is how often at most the open list is reloaded while its
+// listing is stored; the end of the listing always reloads it.
+const listReloadEvery = time.Second
+
+// handleListingProgress records how far a folder's listing is stored. The
+// header shows it while it runs, the log gets its start and end, and the
+// open folder reloads so its mail appears while the first sync runs.
+func (ra *RootApp) handleListingProgress(p msync.ListingProgress) {
+	if ra.listing == nil {
+		ra.listing = make(map[string]map[string]msync.ListingProgress)
+	}
+	folders := ra.listing[p.AccountName]
+	if folders == nil {
+		folders = make(map[string]msync.ListingProgress)
+		ra.listing[p.AccountName] = folders
+	}
+	prev, seen := folders[p.FolderName]
+	folders[p.FolderName] = p
+	ra.trackStart(listingKey(p), p.Stored, p.Done)
+	running := seen && !prev.Done
+	switch {
+	case !p.Done && !running:
+		ui.AppLog.Info("[%s] syncing %s: %d messages, %d already stored", p.AccountName, p.FolderName, p.Total, p.Stored)
+	case p.Done && (running || !seen):
+		ui.AppLog.Info("[%s] %s synced: %d messages", p.AccountName, p.FolderName, p.Total)
+	}
+	if !ra.isActiveAccount(p.AccountName) {
+		return
+	}
+	ra.refreshHeader()
+	if ra.currentFolder == nil || ra.currentFolder.Name != p.FolderName {
+		return
+	}
+	if now := ra.now(); p.Done || now.Sub(ra.listReload) >= listReloadEvery {
+		ra.listReload = now
+		go ra.loadEnvelopes(ra.manager.Active(), ra.currentFolder)
+	}
+}
+
+// listingShown is the listing the header shows for account: the open
+// folder's while it runs, else any running one (by name, so it is stable).
+func (ra *RootApp) listingShown(account string) (msync.ListingProgress, bool) {
+	folders := ra.listing[account]
+	if ra.currentFolder != nil {
+		if p, ok := folders[ra.currentFolder.Name]; ok && !p.Done {
+			return p, true
+		}
+	}
+	var out msync.ListingProgress
+	found := false
+	for name, p := range folders {
+		if !p.Done && (!found || name < out.FolderName) {
+			out, found = p, true
+		}
+	}
+	return out, found
+}
+
+// percent is part of total in whole percent (0 for an empty total).
+func percent(part, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	return part * 100 / total
 }
 
 func (ra *RootApp) isActiveAccount(name string) bool {

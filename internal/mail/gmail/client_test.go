@@ -49,6 +49,51 @@ func TestClient_RetriesOn429And5xx(t *testing.T) {
 	}
 }
 
+// Gmail answers a user going over the per-second quota with 403 and a
+// rate-limit reason: that is waited out like a 429, also for a request that
+// is not safe to repeat (Google refused it before doing anything).
+func TestClient_RetriesOn403RateLimit(t *testing.T) {
+	c, f, sleeps := newTest(t)
+	f.Queue(profilePath, 403, `{"error":{"code":403,"status":"PERMISSION_DENIED","message":"User-rate limit exceeded.",`+
+		`"errors":[{"domain":"usageLimits","reason":"userRateLimitExceeded","message":"User-rate limit exceeded."}]}}`)
+	f.Queue(profilePath, 403, `{"error":{"code":403,"status":"PERMISSION_DENIED",`+
+		`"errors":[{"domain":"usageLimits","reason":"rateLimitExceeded"}]}}`)
+	if err := c.sendJSON(context.Background(), http.MethodGet, "/profile", nil, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.Count(profilePath); n != 3 {
+		t.Fatalf("calls = %d", n)
+	}
+	if len(*sleeps) != 2 {
+		t.Fatalf("sleeps = %v", *sleeps)
+	}
+}
+
+// A 403 that is not a rate limit is not retried, and its reason is in the
+// error so the log says what Google refused (never the message text).
+func TestClient_403NamesTheReason(t *testing.T) {
+	c, f, _ := newTest(t)
+	f.Queue(profilePath, 403, `{"error":{"code":403,"status":"PERMISSION_DENIED","message":"SECRET",`+
+		`"errors":[{"domain":"global","reason":"insufficientPermissions","message":"SECRET"}]}}`)
+	_, _, err := c.Profile(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "403 PERMISSION_DENIED (insufficientPermissions)") || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := f.Count(profilePath); n != 1 {
+		t.Fatalf("calls = %d, want no retry", n)
+	}
+}
+
+// A reason that is not a plain token is left out of the error.
+func TestClient_ReasonMustBeAToken(t *testing.T) {
+	c, f, _ := newTest(t)
+	f.Queue(profilePath, 403, `{"error":{"code":403,"status":"PERMISSION_DENIED","errors":[{"reason":"SECRET with spaces"}]}}`)
+	_, _, err := c.Profile(context.Background())
+	if err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestClient_GivesUpAfterFiveTries(t *testing.T) {
 	c, f, _ := newTest(t)
 	for i := 0; i < 6; i++ {

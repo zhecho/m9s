@@ -74,6 +74,8 @@ func (s *stubAPI) serverInfo(context.Context) (string, error) { return "Stub / 1
 
 func (s *stubAPI) SaveDraft(context.Context, []byte, string) (string, error) { return "d1", nil }
 
+func (s *stubAPI) background(ctx context.Context) context.Context { return ctx }
+
 type coreHarness struct {
 	t    *testing.T
 	core *pollCore

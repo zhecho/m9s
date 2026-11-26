@@ -166,7 +166,14 @@ func (e *MicrosoftEngine) relist(ctx context.Context, f syncedFolder) (folderSyn
 		return folderSync{}, err
 	}
 	r := folderSync{changed: true, removed: len(gone) > 0}
-	return r, e.store.SetFolderCursor(e.cfg.Name, f.name, next)
+	if err := e.store.SetFolderCursor(e.cfg.Name, f.name, next); err != nil {
+		return r, err
+	}
+	if !e.emit(ctx, ListingProgress{AccountName: e.cfg.Name, FolderName: f.name,
+		Stored: len(envs), Total: len(envs), Done: true}) {
+		return r, ctx.Err()
+	}
+	return r, nil
 }
 
 // forget removes messages deleted on the server from every folder.

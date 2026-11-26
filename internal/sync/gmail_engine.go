@@ -81,6 +81,10 @@ func (e *GmailEngine) getRaw(ctx context.Context, id string) ([]byte, error) {
 
 func (e *GmailEngine) notFound(err error) bool { return errors.Is(err, gmail.ErrNotFound) }
 
+// background lets the sync's requests wait behind the user's within
+// Gmail's quota.
+func (e *GmailEngine) background(ctx context.Context) context.Context { return gmail.Background(ctx) }
+
 func (e *GmailEngine) signInAgain(err error) (error, bool) {
 	return gmail.ErrSignInAgain, errors.Is(err, gmail.ErrSignInAgain)
 }

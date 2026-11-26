@@ -75,6 +75,21 @@ type DraftSyncFailed struct {
 
 func (DraftSyncFailed) sealedEvent() {}
 
+// ListingProgress reports a folder's listing being stored in the local
+// copy (an API account: Gmail, Microsoft): Stored of the Total messages
+// the server lists are in the store so far. Done is set on the report that
+// ends the listing. The open list reloads from it, so the first sync of a
+// big mailbox fills the screen while it runs.
+type ListingProgress struct {
+	AccountName string
+	FolderName  string
+	Stored      int
+	Total       int
+	Done        bool
+}
+
+func (ListingProgress) sealedEvent() {}
+
 // ServerInfo names the remote server of an account, e.g. "Dovecot / 2.3.21"
 // or "Gmail API / v1 (rev 20261106)". Sent at most once per engine run.
 type ServerInfo struct {

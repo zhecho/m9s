@@ -53,7 +53,7 @@ func newGmailFlow(t *testing.T, seed func(f *gmailtest.Fake)) *gmailFlow {
 	capture := filepath.Join(t.TempDir(), "capture")
 	ds := draft.NewStore(t.TempDir())
 	events := make(chan msync.Event, 64)
-	eng := msync.NewGmailEngine(acctCfg, events, st, ds, gmail.New(f.Server.Client(), gmail.WithBaseURL(f.URL())))
+	eng := msync.NewGmailEngine(acctCfg, events, st, ds, gmail.New(f.Server.Client(), gmail.WithBaseURL(f.URL()), gmail.WithQuota(1e6, 1e6, 0)))
 	ctx, cancel := context.WithCancel(context.Background())
 
 	skin, _ := ui.LoadSkin("")

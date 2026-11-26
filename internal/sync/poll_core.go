@@ -47,6 +47,9 @@ type polledAPI interface {
 	// serverInfo describes the API, for the server info line.
 	serverInfo(ctx context.Context) (string, error)
 	SaveDraft(ctx context.Context, raw []byte, replaces string) (string, error)
+	// background marks ctx as the engine's own work (syncing, downloading
+	// bodies), which the provider may let wait behind what the user does.
+	background(ctx context.Context) context.Context
 }
 
 // pollCore is the provider-neutral half of an API account engine. Every
@@ -233,7 +236,7 @@ func (c *pollCore) waitRetry(ctx context.Context, delay time.Duration) bool {
 // session signs in, announces the folders, syncs and then polls until an
 // error or ctx ends it. connected reports whether it reached StateConnected.
 func (c *pollCore) session(ctx context.Context, recovered bool) (connected bool, err error) {
-	sctx, cancel := context.WithCancel(ctx)
+	sctx, cancel := context.WithCancel(c.api.background(ctx))
 	var wg gosync.WaitGroup
 	defer func() {
 		cancel()

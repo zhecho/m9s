@@ -100,6 +100,9 @@ func (e *MicrosoftEngine) getRaw(ctx context.Context, id string) ([]byte, error)
 
 func (e *MicrosoftEngine) notFound(err error) bool { return errors.Is(err, graph.ErrNotFound) }
 
+// background leaves ctx as it is: Graph's limiter has no priorities.
+func (e *MicrosoftEngine) background(ctx context.Context) context.Context { return ctx }
+
 func (e *MicrosoftEngine) signInAgain(err error) (error, bool) {
 	return graph.ErrSignInAgain, errors.Is(err, graph.ErrSignInAgain)
 }

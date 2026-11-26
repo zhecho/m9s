@@ -852,3 +852,24 @@ func TestTokenSaved(t *testing.T) {
 		t.Fatalf("SetTokenSaved lost the cursor: %q", c)
 	}
 }
+
+// A message stored under one label is found by id from any folder, so a
+// sync does not fetch its headers again for another label.
+func TestEnvelopesByID_findsAMessageInAnyFolder(t *testing.T) {
+	s := NewMemory()
+	must(t, s.AddMessages("acct", "INBOX", []*mail.Envelope{gmailEnv("a", "t", 1)}))
+	must(t, s.AddMessages("acct", "Work", []*mail.Envelope{gmailEnv("b", "t", 2)}))
+	must(t, s.AddMessages("other", "INBOX", []*mail.Envelope{gmailEnv("c", "t", 3)}))
+
+	got := s.EnvelopesByID("acct", []string{"a", "b", "c", "missing"})
+	if len(got) != 2 || got["a"] == nil || got["a"].ID != "a" || got["b"] == nil || got["b"].SortKey != 2 {
+		t.Fatalf("got %v, want a and b (c is another account's)", got)
+	}
+	if n := len(s.EnvelopesByID("acct", nil)); n != 0 {
+		t.Errorf("no ids found %d", n)
+	}
+	var nilStore *Store
+	if nilStore.EnvelopesByID("acct", []string{"a"}) != nil {
+		t.Error("nil store must hold nothing")
+	}
+}

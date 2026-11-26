@@ -40,6 +40,7 @@ type gHarness struct {
 	eng *msync.GmailEngine
 
 	setup func(*msync.GmailEngine) // runs on every new engine before Start
+	quota gmail.Option             // the client's quota; nil: no limit to speak of
 
 	mu     gosync.Mutex
 	events []msync.Event
@@ -85,7 +86,11 @@ func (h *gHarness) start(include ...string) {
 		cfg.Folders.Include = append(cfg.Folders.Include, config.FolderEntry{Name: name})
 	}
 	events := make(chan msync.Event)
-	h.eng = msync.NewGmailEngine(cfg, events, h.st, h.ds, gmail.New(h.f.Server.Client(), gmail.WithBaseURL(h.f.URL())))
+	quota := h.quota
+	if quota == nil {
+		quota = gmail.WithQuota(1e6, 1e6, 0) // tests run many quick requests
+	}
+	h.eng = msync.NewGmailEngine(cfg, events, h.st, h.ds, gmail.New(h.f.Server.Client(), gmail.WithBaseURL(h.f.URL()), quota))
 	ctx, cancel := context.WithCancel(context.Background())
 	drained := make(chan struct{})
 	go func() {
@@ -828,6 +833,63 @@ func TestGmailEngine_MoveTargets(t *testing.T) {
 	for _, no := range []string{"INBOX", "Drafts", "Sent", "Trash"} {
 		if slices.Contains(got, no) {
 			t.Errorf("MoveTargets = %v offers %s", got, no)
+		}
+	}
+}
+
+// The sync's requests are background work: they leave the quota's reserve
+// to the user. Here the reserve is the whole bucket, so the sync stalls
+// after its first request while opening a message still works.
+func TestGmailEngine_SyncLeavesTheQuotaReserveToTheUser(t *testing.T) {
+	f := gmailtest.New()
+	t.Cleanup(f.Close)
+	id := f.AddMessage(gmailtest.Message{LabelIDs: []string{"INBOX"}, Raw: gRaw("hello", "hello@x")})
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	h := &gHarness{t: t, f: f, st: st, ds: draft.NewStore(t.TempDir()), quota: gmail.WithQuota(1e-6, 1000, 1000)}
+	h.start()
+	t.Cleanup(func() { h.stop() })
+
+	msg, err := h.eng.FetchBody(context.Background(), "INBOX", id)
+	if err != nil || !strings.Contains(msg.PlainText(), "body of hello") {
+		t.Fatalf("FetchBody = %v, %v", msg, err)
+	}
+	for deadline := time.Now().Add(500 * time.Millisecond); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if c := h.st.Cursor(gAcct); c != "" {
+			t.Fatalf("the sync went into the reserve: cursor %q stored", c)
+		}
+	}
+}
+
+func metadataFetches(f *gmailtest.Fake, id string) int {
+	n := 0
+	for _, r := range f.Requests() {
+		if r.Path == "/gmail/v1/users/me/messages/"+id && strings.Contains(r.Query, "format=metadata") {
+			n++
+		}
+	}
+	return n
+}
+
+// A message under two synced labels has its headers fetched once (each
+// fetch costs 20 quota units); the second label reuses them, with its own
+// listing's flags.
+func TestGmailEngine_MessageInTwoLabelsFetchedOnce(t *testing.T) {
+	var both string
+	h := newGmail(t, func(f *gmailtest.Fake) {
+		both = f.AddMessage(gmailtest.Message{LabelIDs: []string{"INBOX", "Label_1", "UNREAD", "STARRED"}, Raw: gRaw("both", "both@x")})
+	})
+	h.synced()
+	if n := metadataFetches(h.f, both); n != 1 {
+		t.Fatalf("headers fetched %d times, want 1", n)
+	}
+	for _, folder := range []string{"INBOX", "Work"} {
+		e := h.env(folder, both)
+		if e == nil || e.Subject != "both" || !e.IsUnread() || !e.IsFlagged() {
+			t.Fatalf("%s: %+v", folder, e)
 		}
 	}
 }

@@ -130,7 +130,9 @@ RSRV:     Dovecot / -         <S>   Sync                      <o> Open
   without a connection — and refreshed when the server answers. The copy is
   filled in the background (for IMAP over a separate connection per account):
   headers first, then message content, INBOX and the newest first; the Status
-  row shows `saving mail 1200/53000` while it runs. Afterwards an IMAP account
+  row shows `saving mail 1200/53000 (2%)` while it runs (Gmail and Microsoft
+  show `syncing INBOX 300/5400 (5%)` before it while the headers are
+  copied; see [First sync](#first-sync)). Afterwards an IMAP account
   is compared with the server every 5 minutes and whenever new mail arrives in
   INBOX; Gmail and Microsoft ask what changed every `badge_poll` and fetch
   missing content every `body_cache_poll`. So mail deleted or read elsewhere
@@ -494,16 +496,36 @@ Everything secret lives in KeePassXC, so `keepassxc: true` is required.
 
 ### Setup (one time)
 
-No billing account is needed.
+No billing account is needed. The OAuth client is not given any IAM role:
+m9s calls Gmail as you, with the access you approve at `m9s login`. The
+project only needs the Gmail API turned on and a consent screen that lets
+your account in.
 
-1. Create a project and enable the Gmail API (in Cloud Shell:
-   `gcloud services enable gmail.googleapis.com`).
-2. In the web console, open the OAuth consent screen: user type **External**,
-   app name `m9s`. Then **Publish app** so it is "In production". While it is
-   in "Testing", Google expires refresh tokens after 7 days. (Menu names change
-   often; look for the consent screen / Google Auth platform section.)
-3. Create an OAuth client of type **Desktop app**. Note its client ID and
-   client secret.
+1. Enable the Gmail API on the client's project. The client ID begins with
+   the project **number** (`1234-abc.apps.googleusercontent.com` → `1234`):
+
+   ```sh
+   gcloud auth login
+   gcloud projects list --filter="projectNumber=1234" --format="value(projectId)"
+   gcloud config set project <PROJECT_ID>
+   gcloud services enable gmail.googleapis.com
+   gcloud services list --enabled --filter="config.name=gmail.googleapis.com"   # check
+   ```
+
+   To keep this in code instead, it is one OpenTofu/Terraform
+   `google_project_service` resource for `gmail.googleapis.com`.
+2. In the web console, **Google Auth platform** (older menus: APIs & Services
+   → OAuth consent screen). gcloud cannot set this for a personal Gmail
+   account (`gcloud iap oauth-brands` only makes Workspace "Internal" brands):
+   - **Branding**: app name `m9s`, user type **External**.
+   - **Data access** (optional): add the scope `https://mail.google.com/` —
+     the only one m9s asks for (read, send, delete for good).
+   - **Audience**: **Publish app** so it is "In production". While it is in
+     "Testing", only the Test users listed there can sign in and Google
+     expires refresh tokens after 7 days.
+3. **Clients**: create an OAuth client of type **Desktop app** (m9s signs in
+   on a `127.0.0.1` redirect; a "Web application" client fails with
+   `redirect_uri_mismatch`). Note its client ID and client secret.
 
 ### Config
 
@@ -571,6 +593,45 @@ If login says the client entry is not found, set that entry's URL to
 - `a` archives the selected conversation: it takes the Inbox label off every
   message in it and keeps their other labels. `m` moves it to another label.
 - New mail is checked every 30 seconds (`badge_poll`).
+
+#### First sync
+
+The first time an account connects, m9s copies the headers of every synced
+label into the local copy, INBOX first, newest first, then the message
+content. Mail appears as it arrives: the open folder fills while it runs.
+
+A big mailbox takes hours. Gmail allows each user 6,000 quota units a minute
+per Cloud project, and that cannot be raised; each call costs a fixed number
+of units ([Gmail API quota](https://developers.google.com/workspace/gmail/api/reference/quota)):
+a message's headers 20, its content 60, a listing 5, a send 100. m9s spends
+at most 85 units a second (5,700 a minute), so per hour it copies about
+15,000 headers, then about 5,000 messages' content. 50,000 messages take
+about 3¼ hours for the headers and 10 more for the content. A message under
+several synced labels is fetched once, headers and content. The sync leaves
+part of the quota free, so opening, sending or searching mail does not wait
+behind it.
+
+- The Status row shows `syncing INBOX 1350/5400 (25%) · ~12m left` while a
+  label's headers are copied, then `saving mail 1200/53000 (2%) · ~10h15m left`
+  while the content is. The time left appears after 10 seconds, from the
+  rate so far.
+- The log (`l`) gets `[<account>] syncing INBOX: 5400 messages, 0 already stored`
+  when a label starts, `[<account>] INBOX synced: 5400 messages` when it is
+  done, and `[<account>] local copy up to date: 53000 messages` when the
+  content is.
+- When Gmail still says the quota is used up (`403 … (userRateLimitExceeded)`,
+  `(rateLimitExceeded)` or `429`), for example because another app uses the
+  same Cloud project for your account, m9s pauses all its requests, then tries
+  again (5 tries in all) before it reports the error and reconnects.
+- Searching (`/` then `enter`) and opening All Mail list 50 conversations,
+  about 2,000–3,000 units: a third to a half of a minute's quota.
+- If nothing shows and the Status row is not `● connected`, the reason is on
+  the bottom row and in the log. Gmail's reason is in brackets, e.g.
+  `gmail: http 403 PERMISSION_DENIED (insufficientPermissions)`: sign in again
+  with `m9s login <account>`. If the Gmail API is not enabled on the client's
+  project, see [Setup](#setup-one-time-1).
+
+Later starts only fetch what changed.
 
 #### Archive and All Mail
 
