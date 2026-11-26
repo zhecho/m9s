@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tcell "github.com/derailed/tcell/v2"
@@ -114,12 +115,19 @@ type RootApp struct {
 	deliver   func(func()) // tests: where search answers are queued
 	// list is what the open list asks its engine's Lister for; debounce
 	// delays the filter's folder search while typing (tests: at once).
-	list       listState
-	bulkBusy   bool // a bulk action on the selection is running (UI goroutine)
-	searching  bool // a server search is on its way (UI goroutine)
-	debounce   func(time.Duration, func())
-	searchSeq  int // identifies the latest search asked for
-	bodyLoader func(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen bool)
+	list     listState
+	bulkBusy bool // a bulk action on the selection is running (UI goroutine)
+	// The log page shows logRendered entries of the log under the filter
+	// logRenderedFilter, logShown of them matching; a refresh adds the rest.
+	logRendered       int
+	logShown          int
+	logRenderedFilter string
+	logRefreshQueued  atomic.Bool
+	logDeliver        func(func()) // tests: where log redraws are queued
+	searching         bool         // a server search is on its way (UI goroutine)
+	debounce          func(time.Duration, func())
+	searchSeq         int // identifies the latest search asked for
+	bodyLoader        func(acct *mail.Account, folder *mail.Folder, env *mail.Envelope, markSeen bool)
 
 	// browser holds the pages handed to the web browser; openBrowser shows
 	// one (tests replace it). browserPending is the message the user asked to
@@ -156,6 +164,7 @@ func NewRootApp(uiApp *ui.App, cfg *config.Config, manager *mail.Manager,
 		now:        time.Now,
 	}
 	ra.sendFn = ra.sendDraft
+	ra.uiApp.StatusBar.SetLogText(ra.logText)
 	var filterTimer *time.Timer // UI goroutine only
 	ra.debounce = func(d time.Duration, fn func()) {
 		if filterTimer != nil {
@@ -261,7 +270,7 @@ func (ra *RootApp) wireSelection() {
 			ra.uiApp.StatusBar.Error("Copy failed: " + err.Error())
 			return
 		}
-		ra.uiApp.StatusBar.Info(fmt.Sprintf("Copied %d characters", len([]rune(text))))
+		ra.uiApp.StatusBar.InfoApp(fmt.Sprintf("Copied %d characters", len([]rune(text))))
 	}
 	sel.Install(ra.uiApp.Application)
 	ra.selector = sel
@@ -403,6 +412,26 @@ func (ra *RootApp) clearOpenFolder() {
 	ra.dropSearch()
 	ra.maillist.SetEnvelopes(nil)
 	ra.refreshMailListTitle()
+}
+
+// logText words a status message for the log as the engines' lines are:
+// the account it is about in front ("[work] Opened in browser"). A message
+// that starts with an account's name ("work: reconnected") gets it in that
+// form; one already tagged ("[…]") stays as it is; otherwise it is about
+// the open account.
+func (ra *RootApp) logText(msg string) string {
+	if strings.HasPrefix(msg, "[") {
+		return msg
+	}
+	for _, a := range ra.manager.All() {
+		if rest, ok := strings.CutPrefix(msg, a.Name+": "); ok {
+			return "[" + a.Name + "] " + rest
+		}
+	}
+	if acct := ra.manager.Active(); acct != nil {
+		return "[" + acct.Name + "] " + msg
+	}
+	return msg
 }
 
 // refreshMailListTitle re-renders the mail list title, which carries the
@@ -834,10 +863,21 @@ func (ra *RootApp) buildLogView() *tview.TextView {
 	tv.SetScrollable(true)
 	tv.SetWordWrap(true)
 
+	// One redraw queued at a time, however many lines arrive: the log
+	// starts with up to 2,000 lines of earlier runs, and the redraw adds
+	// only the new ones.
 	refresh := func() {
-		go ra.uiApp.QueueUpdateDraw(func() {
+		if !ra.logRefreshQueued.CompareAndSwap(false, true) {
+			return
+		}
+		deliver := func(fn func()) { ra.uiApp.QueueUpdateDraw(fn) }
+		if ra.logDeliver != nil {
+			deliver = ra.logDeliver
+		}
+		go deliver(func() {
+			ra.logRefreshQueued.Store(false)
 			if ra.logView == tv {
-				ra.renderLogView()
+				ra.appendLogView()
 			} else {
 				renderLog(tv, ra.uiApp.Skin)
 			}
@@ -1317,7 +1357,7 @@ func (ra *RootApp) runEditor(d smtpadapter.Draft, localID, supersede string) {
 
 	editor := ra.editorCommand()
 	if editor == "" {
-		ra.uiApp.StatusBar.Error("no editor — set $EDITOR or ui.editor in config.yaml")
+		ra.uiApp.StatusBar.ErrorApp("no editor — set $EDITOR or ui.editor in config.yaml")
 		return
 	}
 

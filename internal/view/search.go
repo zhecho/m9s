@@ -235,7 +235,7 @@ func (ra *RootApp) showSearch(acct *mail.Account, folder *mail.Folder, text, kee
 	ra.search.query = text
 	ra.maillist.SetSelf(ra.selfAddress())
 	ra.maillist.SetSearch(text)
-	ra.maillist.SetListed(false) // the server's answer: narrowed locally, counted as is
+	ra.maillist.SetListed(false)                                           // the server's answer: narrowed locally, counted as is
 	ra.maillist.SetSearchInfo(searchKindOf(acct), len(envs), false, false) // the caller may know more
 	ra.reloading = true
 	ra.maillist.SetEnvelopes(envs)

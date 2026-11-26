@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/zhecho/m9s/internal/config"
 	"github.com/zhecho/m9s/internal/draft"
+	"github.com/zhecho/m9s/internal/instance"
 	"github.com/zhecho/m9s/internal/mail"
 	"github.com/zhecho/m9s/internal/store"
 	msync "github.com/zhecho/m9s/internal/sync"
@@ -49,8 +51,12 @@ var errRestart = errors.New("restart")
 
 func Execute() {
 	err := rootCmd.Execute()
+	finishCLILog(err)
 	if errors.Is(err, errRestart) {
 		err = restartSelf()
+	}
+	if errors.Is(err, errChecksFailed) {
+		os.Exit(1) // its lines said what failed
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -59,6 +65,19 @@ func Execute() {
 }
 
 func run(cmd *cobra.Command, args []string) error {
+	// One m9s at a time, before anything else (the passwords window).
+	release, ok := lockInstance(instance.StateDir(), os.Stderr, time.Sleep)
+	if !ok {
+		os.Exit(1)
+	}
+	defer release() // before a :config restart, which takes it anew
+	if lf, err := startLogFile(instance.StateDir()); err != nil {
+		ui.AppLog.Warn("log not kept on disk: %v", err)
+	} else {
+		defer lf.Close()
+		defer followLog(lf, time.Second)() // m9s commands' lines, as they come
+	}
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return fmt.Errorf("config: %w", err)

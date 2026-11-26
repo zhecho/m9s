@@ -30,6 +30,9 @@ ui:
   theme: solarized-dark   # solarized-light, dracula, gruvbox-dark, nord, monokai, or ~/.config/m9s/themes/<name>.yaml
   # colors:               # optional per-role overrides
   #   accent: "#ff79c6"
+  # browser:              # the page b opens: its Light and Dark modes
+  #   light_theme: solarized-light   # default: theme if it is light, else solarized-light
+  #   dark_theme: solarized-dark     # default: theme if it is dark, else solarized-dark
   editor: $EDITOR
   date_format: "Jan 02 15:04"
   mail_list_rows: 10      # messages visible in the mail list; the preview gets the rest (drag the border to change)

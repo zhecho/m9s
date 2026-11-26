@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -40,6 +41,39 @@ type Logger struct {
 	mu      sync.Mutex
 	entries []Entry
 	notify  []func()
+	sink    func(Entry) // where each new entry is also written (the log file)
+}
+
+// SetSink makes every entry added from now on also go to fn (the log file).
+func (l *Logger) SetSink(fn func(Entry)) {
+	l.mu.Lock()
+	l.sink = fn
+	l.mu.Unlock()
+}
+
+// AddEntries appends entries that already have their time (another
+// process's lines, read from the log file). They are shown, not written
+// to the sink again.
+func (l *Logger) AddEntries(entries []Entry) {
+	if len(entries) == 0 {
+		return
+	}
+	l.mu.Lock()
+	l.entries = append(l.entries, entries...)
+	cbs := make([]func(), len(l.notify))
+	copy(cbs, l.notify)
+	l.mu.Unlock()
+	for _, fn := range cbs {
+		fn()
+	}
+}
+
+// Load puts entries (earlier runs, from the log file) before the ones
+// already here. They are not written to the sink again.
+func (l *Logger) Load(entries []Entry) {
+	l.mu.Lock()
+	l.entries = append(append(make([]Entry, 0, len(entries)+len(l.entries)), entries...), l.entries...)
+	l.mu.Unlock()
 }
 
 // AppLog is the global application logger.
@@ -52,7 +86,11 @@ func (l *Logger) Add(level Level, format string, args ...any) {
 	l.entries = append(l.entries, e)
 	cbs := make([]func(), len(l.notify))
 	copy(cbs, l.notify)
+	sink := l.sink
 	l.mu.Unlock()
+	if sink != nil {
+		sink(e)
+	}
 	for _, fn := range cbs {
 		fn()
 	}
@@ -97,8 +135,12 @@ func FormatEntry(e Entry, s *Skin) string {
 	if s.Colors[role] == "" {
 		role = "foreground" // a skin without the role still reads
 	}
+	when := e.Time.Format("2006-01-02 15:04:05")
+	if e.Time.IsZero() { // a line of the log file without a time
+		when = strings.Repeat(" ", len(when))
+	}
 	return fmt.Sprintf("[%s::]%s[-:-:-] [%s::]%-5s %s[-:-:-]",
-		s.ColorName("dim"), e.Time.Format("2006-01-02 15:04:05"),
+		s.ColorName("dim"), when,
 		s.ColorName(role), e.Level, escapeTags(e.Msg))
 }
 

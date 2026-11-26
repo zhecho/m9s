@@ -64,16 +64,16 @@ type configEdit struct {
 // the file, and the user is offered to edit it again or to discard it.
 func (ra *RootApp) editConfig() {
 	if ra.configPath == "" {
-		ra.uiApp.StatusBar.Error("no config file to edit")
+		ra.uiApp.StatusBar.ErrorApp("no config file to edit")
 		return
 	}
 	if ra.editorCommand() == "" {
-		ra.uiApp.StatusBar.Error("no editor — set $EDITOR or ui.editor in config.yaml")
+		ra.uiApp.StatusBar.ErrorApp("no editor — set $EDITOR or ui.editor in config.yaml")
 		return
 	}
 	ce, err := newConfigEdit(ra.configPath)
 	if err != nil {
-		ra.uiApp.StatusBar.Error("config: " + err.Error())
+		ra.uiApp.StatusBar.ErrorApp("config: " + err.Error())
 		return
 	}
 	ra.continueConfigEdit(ce)
@@ -116,18 +116,18 @@ func newConfigEdit(path string) (*configEdit, error) {
 func (ra *RootApp) continueConfigEdit(ce *configEdit) {
 	if err := ra.editFile(ce.copy); err != nil {
 		os.Remove(ce.copy)
-		ra.uiApp.StatusBar.Error("config not changed: editor: " + err.Error())
+		ra.uiApp.StatusBar.ErrorApp("config not changed: editor: " + err.Error())
 		return
 	}
 	data, err := os.ReadFile(ce.copy)
 	if err != nil {
 		os.Remove(ce.copy)
-		ra.uiApp.StatusBar.Error("config not changed: " + err.Error())
+		ra.uiApp.StatusBar.ErrorApp("config not changed: " + err.Error())
 		return
 	}
 	if bytes.Equal(data, ce.orig) {
 		os.Remove(ce.copy)
-		ra.uiApp.StatusBar.Info("config unchanged")
+		ra.uiApp.StatusBar.InfoApp("config unchanged")
 		return
 	}
 	if err := checkConfig(data); err != nil {
@@ -139,13 +139,13 @@ func (ra *RootApp) continueConfigEdit(ce *configEdit) {
 					return
 				}
 				os.Remove(ce.copy)
-				ra.uiApp.StatusBar.Info("config edit discarded")
+				ra.uiApp.StatusBar.InfoApp("config edit discarded")
 			})
 		return
 	}
 	if err := os.Rename(ce.copy, ce.target); err != nil {
 		os.Remove(ce.copy)
-		ra.uiApp.StatusBar.Error("config not saved: " + err.Error())
+		ra.uiApp.StatusBar.ErrorApp("config not saved: " + err.Error())
 		return
 	}
 	ui.AppLog.Info("config saved to %s: restarting m9s", ce.target)

@@ -47,7 +47,7 @@ func setupPane(t *testing.T) *Harness {
 func NewHarness(t *testing.T) *Harness {
 	t.Helper()
 	h := setupPane(t)
-	if err := exec.Command("tmux", "send-keys", "-t", h.paneID, "m9s", "Enter").Run(); err != nil {
+	if err := exec.Command("tmux", "send-keys", "-t", h.paneID, stateEnv(t)+"m9s", "Enter").Run(); err != nil {
 		t.Fatalf("launch m9s: %v", err)
 	}
 	h.waitFor("INBOX", 10*time.Second)
@@ -59,12 +59,19 @@ func NewHarness(t *testing.T) *Harness {
 func NewHarnessWithEditor(t *testing.T, editorPath string) *Harness {
 	t.Helper()
 	h := setupPane(t)
-	launch := "EDITOR=" + editorPath + " m9s"
+	launch := stateEnv(t) + "EDITOR=" + editorPath + " m9s"
 	if err := exec.Command("tmux", "send-keys", "-t", h.paneID, launch, "Enter").Run(); err != nil {
 		t.Fatalf("launch m9s with editor: %v", err)
 	}
 	h.waitFor("INBOX", 10*time.Second)
 	return h
+}
+
+// stateEnv points the m9s under test at a state directory of its own, so
+// it neither meets the lock of an m9s you have open nor writes to your log
+// and layout.
+func stateEnv(t *testing.T) string {
+	return "XDG_STATE_HOME=" + t.TempDir() + " "
 }
 
 // FakeEditorPath returns the absolute path to e2e/testdata/fake-editor.sh.

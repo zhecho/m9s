@@ -88,8 +88,8 @@ func runCheck(cmd *cobra.Command, _ []string) error {
 	})
 	look.close()
 
-	if reportCheck(accounts, results, defaultCheckDeps(), os.Stdout) {
-		os.Exit(1)
+	if reportCheck(accounts, results, defaultCheckDeps(), cmd.OutOrStdout()) {
+		return errChecksFailed
 	}
 	return nil
 }

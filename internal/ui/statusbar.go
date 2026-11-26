@@ -24,6 +24,18 @@ type StatusBar struct {
 	flashTimer *time.Timer
 	skin       *Skin
 	app        *tview.Application
+	logText    func(msg string) string // how a message is worded in the log
+}
+
+// SetLogText sets how Info and Error word their message in the log (the
+// account it is about in front); the bar shows it as it is.
+func (sb *StatusBar) SetLogText(fn func(msg string) string) { sb.logText = fn }
+
+func (sb *StatusBar) forLog(msg string) string {
+	if sb.logText == nil {
+		return msg
+	}
+	return sb.logText(msg)
 }
 
 // NewStatusBar creates the one-row status bar.
@@ -83,14 +95,29 @@ func (sb *StatusBar) setFlash(msg, color string, dur time.Duration) {
 	}
 }
 
-// Info shows a green message in the flash row that clears after 3s.
+// Info shows a green message in the flash row that clears after 3s, and
+// logs it as SetLogText words it.
 func (sb *StatusBar) Info(msg string) {
+	AppLog.Info("%s", sb.forLog(msg))
+	sb.setFlash(msg, sb.skin.Colors["flash_ok"], 3*time.Second)
+}
+
+// Error shows a red message in the flash row that clears after 5s, and
+// logs it as SetLogText words it.
+func (sb *StatusBar) Error(msg string) {
+	AppLog.Error("%s", sb.forLog(msg))
+	sb.setFlash(msg, sb.skin.Colors["flash_err"], 5*time.Second)
+}
+
+// InfoApp is Info for a message about m9s itself, not an account: it is
+// logged as it is.
+func (sb *StatusBar) InfoApp(msg string) {
 	AppLog.Info("%s", msg)
 	sb.setFlash(msg, sb.skin.Colors["flash_ok"], 3*time.Second)
 }
 
-// Error shows a red message in the flash row that clears after 5s.
-func (sb *StatusBar) Error(msg string) {
+// ErrorApp is Error for a message about m9s itself, not an account.
+func (sb *StatusBar) ErrorApp(msg string) {
 	AppLog.Error("%s", msg)
 	sb.setFlash(msg, sb.skin.Colors["flash_err"], 5*time.Second)
 }

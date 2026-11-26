@@ -22,6 +22,7 @@ with `[` / `]`.
 
 - [Screen](#screen)
   - [Connection status](#connection-status)
+  - [The log, and one m9s at a time](#the-log-and-one-m9s-at-a-time)
 - [Installation](#installation)
   - [From source](#from-source)
   - [Version](#version)
@@ -174,6 +175,47 @@ KeePassXC, the config, the Keychain or wherever it lives — **restart m9s**;
 The first failure and the recovery are reported on the bottom row; every
 attempt is written to the log (`l`).
 
+### The log, and one m9s at a time
+
+The log (`l`) is kept in `~/.local/state/m9s/m9s.log` (under
+`$XDG_STATE_HOME/m9s/` when set), private to you, and appended to as things
+happen. When m9s starts, the log view begins with the last 2,000 lines of
+earlier runs, then a line marking this one:
+`── m9s v1.2.0 started (pid 1234) ──`. The file reads as plain text
+(`less`, `grep`): `2026-11-26 09:24:23 ERROR [work] connection failed …`. Past
+5 MB it moves to `m9s.log.1`, replacing the previous one, and a new file
+starts, so it never takes more than about 10 MB. As before, passwords and
+tokens are never logged. If the file cannot be written (a full disk, say),
+m9s says so once in the log (`l`), keeps the log there, tries the file again
+with the next line, and runs on.
+
+The commands `m9s login`, `logout`, `check` and `send` log to the same file:
+the command as typed (a message's text left out: `--body=…(120 chars)`),
+what it prints as its result, and how it ended:
+
+```text
+2026-11-26 15:12:57 INFO  [cli] m9s login work --smtp
+2026-11-26 15:12:59 INFO  [cli] smtp: ✓ login OK
+2026-11-26 15:12:59 INFO  [cli] m9s login: done
+```
+
+Prompts and what you type at them are not logged. An open m9s shows these
+lines in its log (`l`) within a second, so after `m9s login` in another
+terminal you can see it worked before pressing `S`. Only the open m9s
+rotates the file.
+
+Only one m9s runs at a time, per user. A second one prints
+
+```text
+m9s is already running (pid 1234); this one quits in 3 seconds.
+```
+
+and quits. The lock (`m9s.lock`, next to the log) is held by the running m9s
+and freed by the system when it ends, also after a crash, so it never needs
+clearing by hand; a `:config` restart takes it again at once. `m9s login`,
+`logout`, `check` and `send` are not affected: run them in another terminal
+while m9s is open.
+
 ## Installation
 
 ### From source
@@ -206,6 +248,12 @@ it by hand:
 ```bash
 go build -ldflags "-X github.com/zhecho/m9s/internal/version.Version=v1.0.0" .
 ```
+
+**Upgrading to v1.2.0:** on the first start, m9s adds a search column to its
+local copy (`~/.local/share/m9s/mail/index.db`) and fills it for every stored
+message, once. On a large mailbox the screen takes a few seconds longer to
+appear that one time. The `/` filter uses that column to search whole
+folders.
 
 ## Configuration
 
@@ -1111,14 +1159,16 @@ mark_unread: u
 star: "*"
 sync: S
 archive: a
-search_local: /
+search_local: /     # filter the whole folder (local copy)
+search_server: "\\" # search the server
 save_attachments: s
 open_attachment: o
 move: m
 labels: L          # label / category picker
 edit: e
 command_bar: ":"
-mark: " "          # select / unselect for m and d
+mark: " "          # select / unselect for m, d, a, u and *
+select_all: A      # select every match of the filter (or the whole folder); again: none
 switch_account_next: "]"
 switch_account_prev: "["
 back: q

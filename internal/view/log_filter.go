@@ -50,11 +50,38 @@ func renderLogFiltered(tv *tview.TextView, skin *ui.Skin, filter string) (shown,
 // in the title. UI goroutine only.
 func (ra *RootApp) renderLogView() {
 	shown, total := renderLogFiltered(ra.logView, ra.uiApp.Skin, ra.logFilter)
+	ra.logRendered, ra.logShown, ra.logRenderedFilter = total, shown, ra.logFilter
+	ra.setLogTitle()
+}
+
+// appendLogView adds the entries logged since the log page was last drawn,
+// those that match its filter; a changed filter or a shorter log redraws it
+// all. UI goroutine only.
+func (ra *RootApp) appendLogView() {
+	entries := ui.AppLog.Entries()
+	if ra.logFilter != ra.logRenderedFilter || len(entries) < ra.logRendered {
+		ra.renderLogView()
+		return
+	}
+	match := logMatcher(ra.logFilter)
+	for _, e := range entries[ra.logRendered:] {
+		if match(logLine(e)) {
+			fmt.Fprintln(ra.logView, ui.FormatEntry(e, ra.uiApp.Skin))
+			ra.logShown++
+		}
+	}
+	ra.logRendered = len(entries)
+	ra.logView.ScrollToEnd()
+	ra.setLogTitle()
+}
+
+// setLogTitle names the log page's filter, and how many lines it shows.
+func (ra *RootApp) setLogTitle() {
 	if ra.logFilter == "" {
 		ra.logView.SetTitle(logTitle)
 		return
 	}
-	ra.logView.SetTitle(fmt.Sprintf(" LOGS — /%s (%d of %d) — esc clears, q to close ", tview.Escape(ra.logFilter), shown, total))
+	ra.logView.SetTitle(fmt.Sprintf(" LOGS — /%s (%d of %d) — esc clears, q to close ", tview.Escape(ra.logFilter), ra.logShown, ra.logRendered))
 }
 
 // setLogFilter shows only the log lines with text ("" shows them all).

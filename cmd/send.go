@@ -70,7 +70,7 @@ func runSend(cmd *cobra.Command, _ []string) error {
 		if err := sendMicrosoft(cmd.Context(), acctCfg, results[0], defaultMicrosoft, d); err != nil {
 			return err
 		}
-		fmt.Println("Sent.")
+		fmt.Fprintln(cmd.OutOrStdout(), "Sent.")
 		return nil
 	}
 	if acctCfg.IsGmail() {
@@ -78,7 +78,7 @@ func runSend(cmd *cobra.Command, _ []string) error {
 		if err := sendGmail(cmd.Context(), acctCfg, results[0], defaultGmail, d); err != nil {
 			return err
 		}
-		fmt.Println("Sent.")
+		fmt.Fprintln(cmd.OutOrStdout(), "Sent.")
 		return nil
 	}
 	if !results[0].SMTP.OK {
@@ -105,6 +105,6 @@ func runSend(cmd *cobra.Command, _ []string) error {
 	if _, err := s.Send(pass, draft); err != nil {
 		return err
 	}
-	fmt.Println("Sent.")
+	fmt.Fprintln(cmd.OutOrStdout(), "Sent.")
 	return nil
 }
