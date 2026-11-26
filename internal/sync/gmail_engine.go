@@ -234,6 +234,10 @@ func (e *GmailEngine) MoveToTrash(ctx context.Context, _ string, id string) erro
 	if err := e.api.Trash(ctx, id); err != nil {
 		return err
 	}
+	if env, ok := e.store.EnvelopesByID(e.cfg.Name, []string{id})[id]; ok {
+		defer kick(e.pollKick)
+		return e.trashedLocally([]*mail.Envelope{env})
+	}
 	e.refreshMessage(ctx, id)
 	return nil
 }

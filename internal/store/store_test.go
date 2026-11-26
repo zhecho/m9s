@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -903,5 +904,19 @@ func TestPruneSharedBodies_largeMailboxIsQuick(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "acct", "m00000.eml")); err != nil {
 		t.Errorf("prune dropped a body still referenced: %v", err)
+	}
+}
+
+// Gmail looks messages up by id alone (flags everywhere, shared bodies,
+// envelopes by id); the key starts (account, folder), so without an index
+// each lookup scans the account.
+func TestLookupByIDUsesAnIndex(t *testing.T) {
+	s, _ := open(t)
+	var id, parent, notUsed int
+	var detail string
+	must(t, s.db.QueryRow("EXPLAIN QUERY PLAN UPDATE messages SET flags = '[]' WHERE account = ? AND id = ?", "a", "1").
+		Scan(&id, &parent, &notUsed, &detail))
+	if !strings.Contains(detail, "messages_id") {
+		t.Errorf("plan = %q, want the messages_id index", detail)
 	}
 }

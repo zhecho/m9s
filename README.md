@@ -720,6 +720,11 @@ behind it.
   again (5 tries in all) before it reports the error and reconnects.
 - Searching (`/` then `enter`) and opening All Mail list 50 conversations,
   about 2,000–3,000 units: a third to a half of a minute's quota.
+- Moving to Trash (`d`) costs 20 units a conversation or message, whatever
+  its size: the local copy moves it to Trash without fetching it again, and
+  a label change Gmail reports for a stored message (from m9s or another
+  device) is applied without a fetch. 100 selected conversations take under
+  20 seconds; deleting for good in Trash costs 50 units per thousand.
 - If nothing shows and the Status row is not `● connected`, the reason is on
   the bottom row and in the log. Gmail's reason is in brackets, e.g.
   `gmail: http 403 PERMISSION_DENIED (insufficientPermissions)`: sign in again

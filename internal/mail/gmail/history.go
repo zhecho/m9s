@@ -12,6 +12,9 @@ type HistoryChange struct {
 	Added         []string
 	Deleted       []string
 	LabelsChanged []string
+	// Labels holds, by message id, the labels the message carried at its
+	// last change, when Gmail said: a label change needs no fetch.
+	Labels map[string][]string
 }
 
 // historyTypes are the changes History asks Gmail for.
@@ -19,7 +22,8 @@ var historyTypes = []string{"messageAdded", "messageDeleted", "labelAdded", "lab
 
 type historyRef struct {
 	Message struct {
-		ID string `json:"id"`
+		ID       string   `json:"id"`
+		LabelIDs []string `json:"labelIds"`
 	} `json:"message"`
 }
 
@@ -28,10 +32,14 @@ type historyRef struct {
 // caller must then list the mailbox again.
 func (c *Client) History(ctx context.Context, startID string) (HistoryChange, string, error) {
 	state := map[string]int{} // id -> 1 added, 2 deleted, 3 labels changed
+	labels := map[string][]string{}
 	var order []string
 	note := func(refs []historyRef, kind int) {
 		for _, r := range refs {
 			id := r.Message.ID
+			if r.Message.LabelIDs != nil { // records come oldest first: the last one stands
+				labels[id] = r.Message.LabelIDs
+			}
 			prev, seen := state[id]
 			if !seen {
 				order = append(order, id)
@@ -79,7 +87,7 @@ func (c *Client) History(ctx context.Context, startID string) (HistoryChange, st
 	if newID == "" {
 		newID = startID
 	}
-	var ch HistoryChange
+	ch := HistoryChange{Labels: labels}
 	for _, id := range order {
 		switch state[id] {
 		case 1:

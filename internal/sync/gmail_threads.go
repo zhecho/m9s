@@ -120,8 +120,8 @@ func (e *GmailEngine) TrashThread(ctx context.Context, threadID string) error {
 		return err
 	}
 	e.dropAllMail(threadID)
-	e.refreshThread(ctx, threadID)
-	return nil
+	defer kick(e.pollKick)
+	return e.trashedLocally(e.store.ThreadEnvelopes(e.cfg.Name, threadID))
 }
 
 // labelID returns the label of a shown folder, or name itself (a label id).

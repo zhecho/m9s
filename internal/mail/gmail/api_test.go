@@ -323,6 +323,11 @@ func TestHistoryChanges(t *testing.T) {
 	if !slices.Equal(ch.LabelsChanged, []string{keep}) {
 		t.Errorf("labels changed = %v", ch.LabelsChanged)
 	}
+	// The labels a changed message carries now come with the change: the
+	// poll need not fetch it again.
+	if got := slices.Sorted(slices.Values(ch.Labels[keep])); !slices.Equal(got, []string{"INBOX", "STARRED"}) {
+		t.Errorf("labels of %s = %v, want INBOX and STARRED", keep, ch.Labels[keep])
+	}
 	for _, r := range f.Requests() {
 		if r.Path == "/gmail/v1/users/me/history" {
 			for _, typ := range []string{"messageAdded", "messageDeleted", "labelAdded", "labelRemoved"} {

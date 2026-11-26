@@ -940,3 +940,66 @@ func TestGmailEngine_PermanentDeleteManyBatchesInTrashOnly(t *testing.T) {
 		t.Errorf("Trash rows = %v", got)
 	}
 }
+
+// A label change on a stored message is applied from the history record
+// itself: Gmail sends the labels the message carries now.
+func TestGmailEngine_PollAppliesLabelChangesWithoutFetching(t *testing.T) {
+	var id string
+	h := newGmail(t, func(f *gmailtest.Fake) {
+		id = f.AddMessage(gmailtest.Message{LabelIDs: []string{"INBOX"}, Raw: gRaw("a", "a@x")})
+	})
+	h.synced()
+	before := metadataFetches(h.f, id)
+
+	h.f.ModifyLabels(id, []string{"STARRED", "Label_1"}, []string{"INBOX"})
+	h.eventually("filed under Work, starred", func() bool {
+		env := h.env("Work", id)
+		return env != nil && env.IsFlagged() && !slices.Contains(h.ids("INBOX"), id)
+	})
+	if env := h.env("Work", id); env.Subject != "a" {
+		t.Errorf("subject = %q: the envelope was not kept", env.Subject)
+	}
+	if n := metadataFetches(h.f, id) - before; n != 0 {
+		t.Errorf("%d metadata fetches for a label change", n)
+	}
+}
+
+// Trashing a conversation or a message moves its rows to Trash at once,
+// with no fetch per message: on a bulk delete those cost most of Gmail's
+// quota.
+func TestGmailEngine_TrashMovesRowsWithoutFetching(t *testing.T) {
+	var a, b, c string
+	h := newGmail(t, func(f *gmailtest.Fake) {
+		a = f.AddMessage(gmailtest.Message{ThreadID: "T1", LabelIDs: []string{"INBOX", "Label_1"}, Raw: gRaw("a", "a@x")})
+		b = f.AddMessage(gmailtest.Message{ThreadID: "T1", LabelIDs: []string{"INBOX", "UNREAD"}, Raw: gRaw("b", "b@x")})
+		c = f.AddMessage(gmailtest.Message{LabelIDs: []string{"INBOX"}, Raw: gRaw("c", "c@x")})
+	})
+	h.synced()
+	before := metadataFetches(h.f, a) + metadataFetches(h.f, b) + metadataFetches(h.f, c)
+	ctx := context.Background()
+
+	if err := h.eng.TrashThread(ctx, "T1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.eng.MoveToTrash(ctx, "INBOX", c); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.ids("Trash"); !slices.Equal(got, slices.Sorted(slices.Values([]string{a, b, c}))) {
+		t.Fatalf("Trash = %v right after the trash calls", got)
+	}
+	if len(h.ids("INBOX"))+len(h.ids("Work")) != 0 {
+		t.Fatalf("INBOX %v, Work %v still list trashed mail", h.ids("INBOX"), h.ids("Work"))
+	}
+	if env := h.env("Trash", b); env == nil || slices.Contains(env.Flags, `\Seen`) {
+		t.Errorf("b in Trash = %+v, want it still unread", env)
+	}
+	// The poll the trash calls kick applies the same change from history.
+	cursor := h.st.Cursor(gAcct)
+	h.eventually("poll applied the trash", func() bool { return h.st.Cursor(gAcct) != cursor })
+	if n := metadataFetches(h.f, a) + metadataFetches(h.f, b) + metadataFetches(h.f, c) - before; n != 0 {
+		t.Errorf("%d metadata fetches for trashing", n)
+	}
+	if got := h.ids("Trash"); len(got) != 3 {
+		t.Errorf("Trash after the poll = %v", got)
+	}
+}

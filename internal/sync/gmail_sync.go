@@ -165,7 +165,13 @@ func (e *GmailEngine) poll(ctx context.Context) error {
 		return err
 	}
 	changed := slices.Concat(ch.Added, ch.LabelsChanged)
-	metas, gone, err := e.fetchMetas(ctx, changed)
+	// A stored message whose labels changed is applied from the history
+	// record (20 quota units saved a message); new ones need their headers.
+	unknown, err := e.applyLabels(ch.LabelsChanged, ch.Labels)
+	if err != nil {
+		return err
+	}
+	metas, gone, err := e.fetchMetas(ctx, slices.Concat(ch.Added, unknown))
 	if err != nil {
 		return err
 	}
@@ -448,24 +454,79 @@ func (e *GmailEngine) addListed(folder string, envs []*mail.Envelope) error {
 // applyMeta makes the store hold m in exactly the synced folders whose label
 // it carries, with its current flags everywhere.
 func (e *GmailEngine) applyMeta(m *gmail.MsgMeta) error {
-	env := envelopeOf(m)
+	return e.applyEnvelope(envelopeOf(m), m.LabelIDs)
+}
+
+// applyLabels applies the labels Gmail reported for ids (Labels of a
+// history change) to the stored messages, keeping their envelopes. It
+// returns the ids it could not: not stored, or no labels reported.
+func (e *GmailEngine) applyLabels(ids []string, labels map[string][]string) (unknown []string, err error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	stored := e.store.EnvelopesByID(e.cfg.Name, ids)
+	for _, id := range ids {
+		env, ok := stored[id]
+		l, known := labels[id]
+		if !ok || !known {
+			unknown = append(unknown, id)
+			continue
+		}
+		env.Flags = flagsOf(l)
+		if err := e.applyEnvelope(env, l); err != nil {
+			return nil, err
+		}
+	}
+	return unknown, nil
+}
+
+// applyEnvelope is applyMeta for env carrying labels.
+func (e *GmailEngine) applyEnvelope(env *mail.Envelope, labels []string) error {
 	e.applyMu.Lock()
 	defer e.applyMu.Unlock()
-	if e.deleted[m.ID] {
+	if e.deleted[env.ID] {
 		return nil // fetched before it was deleted for good
 	}
 	for _, f := range e.syncedFolders() {
 		var err error
-		if member(m.LabelIDs, f.label) {
+		if member(labels, f.label) {
 			err = e.store.AddMessages(e.cfg.Name, f.name, []*mail.Envelope{env})
 		} else {
-			err = e.store.RemoveMessages(e.cfg.Name, f.name, []string{m.ID})
+			err = e.store.RemoveMessages(e.cfg.Name, f.name, []string{env.ID})
 		}
 		if err != nil {
 			return err
 		}
 	}
-	return e.store.SetFlagsEverywhere(e.cfg.Name, map[string][]string{m.ID: env.Flags})
+	return e.store.SetFlagsEverywhere(e.cfg.Name, map[string][]string{env.ID: env.Flags})
+}
+
+// trashedLocally shows envs as Gmail files them once trashed: in Trash and
+// under no other label (see member), flags unchanged — whatever labels they
+// carry, so nothing need be fetched. The poll that follows confirms it.
+func (e *GmailEngine) trashedLocally(envs []*mail.Envelope) error {
+	e.applyMu.Lock()
+	defer e.applyMu.Unlock()
+	envs = slices.DeleteFunc(slices.Clone(envs), func(env *mail.Envelope) bool { return e.deleted[env.ID] })
+	if len(envs) == 0 {
+		return nil
+	}
+	ids := make([]string, len(envs))
+	for i, env := range envs {
+		ids[i] = env.ID
+	}
+	for _, f := range e.syncedFolders() {
+		var err error
+		if f.label == "TRASH" {
+			err = e.store.AddMessages(e.cfg.Name, f.name, envs)
+		} else {
+			err = e.store.RemoveMessages(e.cfg.Name, f.name, ids)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // refreshMessage re-reads one message after the UI changed it, so the store

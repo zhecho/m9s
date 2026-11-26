@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS folder_state (
 CREATE TABLE IF NOT EXISTS messages (` + messagesColumns + `);
 CREATE INDEX IF NOT EXISTS messages_order ON messages (account, folder, sort_key);
 CREATE INDEX IF NOT EXISTS messages_thread ON messages (account, thread_id);
+CREATE INDEX IF NOT EXISTS messages_id ON messages (account, id); -- Gmail: a message by id, in any label
 CREATE TABLE IF NOT EXISTS folders (
 	account TEXT PRIMARY KEY,
 	data    TEXT NOT NULL -- the account's folder list as JSON
