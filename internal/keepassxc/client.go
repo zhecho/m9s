@@ -289,6 +289,38 @@ func (c *Client) Logins(ctx context.Context, url string, a Association) ([]Login
 	return out, nil
 }
 
+// Group is one group of the database, with the groups inside it.
+type Group struct {
+	Name     string  `json:"name"`
+	UUID     string  `json:"uuid"`
+	Children []Group `json:"children,omitempty"`
+}
+
+// Groups returns the database's group tree, the root group first. KeePassXC
+// answers only on a connection it has approved (Associate or TestAssociate
+// first).
+func (c *Client) Groups(ctx context.Context) ([]Group, error) {
+	resp, err := c.request(ctx, "get-database-groups", map[string]any{}, false)
+	if err != nil {
+		return nil, err
+	}
+	// KeePassXC nests the list: {"groups": {"groups": [root]}}; a flat
+	// {"groups": [root]} is read too.
+	raw := resp["groups"]
+	if m, ok := raw.(map[string]any); ok {
+		raw = m["groups"]
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var groups []Group
+	if err := json.Unmarshal(data, &groups); err != nil {
+		return nil, errors.New("KeePassXC sent an unreadable group list")
+	}
+	return groups, nil
+}
+
 // SetLogin stores password for login in the entry whose URL field is url:
 // it updates the entry with id uuid, or creates a new one when uuid is "".
 // KeePassXC may ask the user to confirm, and puts new entries in its

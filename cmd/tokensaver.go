@@ -30,8 +30,9 @@ const (
 // in memory whatever happens.
 type tokenSaver struct {
 	account string
-	save    func(ctx context.Context, token string) error
-	store   interface {
+	// save stores token and returns where: the entry's path in KeePassXC.
+	save  func(ctx context.Context, token string) (where string, err error)
+	store interface {
 		TokenSaved(account string) time.Time
 		SetTokenSaved(account string, t time.Time) error
 	}
@@ -53,7 +54,7 @@ func newTokenSaver(acct *config.Account, st *store.Store) *tokenSaver {
 	user := acct.Microsoft.User
 	return &tokenSaver{
 		account: acct.Name,
-		save: func(ctx context.Context, token string) error {
+		save: func(ctx context.Context, token string) (string, error) {
 			s := creds.NewSession(func(text string) {
 				if text != "" {
 					ui.AppLog.Info("[%s] %s", acct.Name, text)
@@ -61,7 +62,10 @@ func newTokenSaver(acct *config.Account, st *store.Store) *tokenSaver {
 			})
 			s.Timeout = time.Minute // KeePassXC may ask to update the entry
 			defer s.Close()
-			return s.SaveLoginQuiet(ctx, creds.MicrosoftTokenHost, user, token)
+			if err := s.SaveLoginQuiet(ctx, creds.MicrosoftTokenHost, user, token); err != nil {
+				return "", err
+			}
+			return s.Where(ctx, creds.MicrosoftTokenHost, user), nil
 		},
 		store: st,
 		now:   time.Now,
@@ -91,7 +95,7 @@ func (t *tokenSaver) Tick(ctx context.Context) {
 	t.mu.Unlock()
 
 	if due {
-		err := t.save(ctx, token)
+		where, err := t.save(ctx, token)
 		t.mu.Lock()
 		if err == nil {
 			t.saved, t.savedRun = token, true
@@ -100,7 +104,7 @@ func (t *tokenSaver) Tick(ctx context.Context) {
 			if serr := t.store.SetTokenSaved(t.account, now); serr != nil {
 				ui.AppLog.Warn("[%s] token saved, but not when: %v", t.account, serr)
 			}
-			ui.AppLog.Info("[%s] Microsoft sign-in saved to KeePassXC", t.account)
+			ui.AppLog.Info("[%s] Microsoft sign-in saved to KeePassXC: %s", t.account, where)
 		} else {
 			t.retryAt = now.Add(tokenRetry)
 			t.mu.Unlock()

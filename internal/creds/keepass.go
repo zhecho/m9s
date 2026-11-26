@@ -21,6 +21,7 @@ type kpClient interface {
 	TestAssociate(ctx context.Context, a keepassxc.Association) error
 	Logins(ctx context.Context, url string, a keepassxc.Association) ([]keepassxc.Login, error)
 	SetLogin(ctx context.Context, url, login, password, uuid string, a keepassxc.Association) error
+	Groups(ctx context.Context) ([]keepassxc.Group, error)
 	Close() error
 }
 
@@ -34,7 +35,9 @@ type AssocStore struct {
 const (
 	noticeLocked  = "KeePassXC is locked — unlock it in the KeePassXC window…"
 	noticeApprove = "Approve the connection in KeePassXC and name it m9s…"
-	noticeSlow    = "Waiting for KeePassXC — allow m9s access to the entry if it asks…"
+	// noticeSlow is filled with what is asked for: "the entry for <user> on
+	// https://<host>".
+	noticeSlow = "Waiting for KeePassXC — allow m9s access to %s if it asks…"
 )
 
 // Session is one start's conversation with KeePassXC: it connects once,
@@ -62,6 +65,10 @@ type Session struct {
 	failed    error
 	remaining time.Duration
 	hosts     map[string][]keepassxc.Login
+	about     string // the entry being asked for, as the waiting notice names it
+	quiet     bool   // a quiet session: Where asks KeePassXC for no entries
+	groups    []keepassxc.Group
+	groupsSet bool // groups was asked for (an answer, or none to be had)
 
 	waited   atomic.Bool
 	skipOnce sync.Once
@@ -133,6 +140,7 @@ func (s *Session) Password(ctx context.Context, host, user string) (string, erro
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.asking(host, user)
 
 	l, err := s.entry(ctx, host, user)
 	if err != nil {
@@ -148,6 +156,7 @@ func (s *Session) SaveLogin(ctx context.Context, host, user, password string) er
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.asking(host, user)
 
 	uuid := ""
 	l, err := s.entry(ctx, host, user)
@@ -183,6 +192,8 @@ func (s *Session) SaveLoginQuiet(ctx context.Context, host, user, password strin
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.asking(host, user)
+	s.quiet = true
 	if !s.started {
 		s.started = true
 		s.remaining = s.Timeout
@@ -205,6 +216,7 @@ func (s *Session) SaveLoginQuiet(ctx context.Context, host, user, password strin
 	case err != nil:
 		return s.whole(ctx, err)
 	}
+	s.hosts[host] = logins // for Where; an entry created below is not in it
 	uuid := ""
 	l, err := pick(logins, host, user)
 	var none *NoEntryError
@@ -443,7 +455,11 @@ func isGiveUp(err error) bool {
 // quick unless KeePassXC is showing the user a dialog; if it takes longer
 // than NoticeDelay, the user is told what m9s is waiting for.
 func (s *Session) ask(ctx context.Context, f func(context.Context) error) error {
-	return s.waitAfter(ctx, s.NoticeDelay, noticeSlow, "did not answer", "skipped — KeePassXC did not answer", f)
+	about := s.about
+	if about == "" {
+		about = "the entry"
+	}
+	return s.waitAfter(ctx, s.NoticeDelay, fmt.Sprintf(noticeSlow, about), "did not answer", "skipped — KeePassXC did not answer", f)
 }
 
 // wait runs f, which waits on the user, under the shared budget and Skip,
@@ -534,4 +550,85 @@ func waitedText(d time.Duration) string {
 		return fmt.Sprintf("%d min", int(d/time.Minute))
 	}
 	return d.String()
+}
+
+// asking notes which entry the next requests are for, for the waiting
+// notice. The caller holds s.mu.
+func (s *Session) asking(host, user string) {
+	s.about = fmt.Sprintf("the entry for %s on https://%s", user, host)
+}
+
+// Where names the entry for user on host by its place in the database: its
+// groups from the root, then its title ("Root/Email/Work/graph"). KeePassXC
+// tells only the name of an entry's own group, so the path comes from the
+// group tree, asked for once; a group whose name is not unique, or no tree,
+// gives just that name. An entry it cannot find is "https://<host> /
+// <user>". It is meant for after Password or a save: it reuses what they
+// read, and a quiet session asks KeePassXC for no entries.
+func (s *Session) Where(ctx context.Context, host, user string) string {
+	s.init()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fallback := fmt.Sprintf("https://%s / %s", host, user)
+	if s.client == nil || s.failed != nil {
+		return fallback
+	}
+	logins, known := s.hosts[host]
+	if !known && !s.quiet {
+		err := s.ask(ctx, func(actx context.Context) error {
+			var err error
+			logins, err = s.client.Logins(actx, "https://"+host, s.assoc)
+			return err
+		})
+		if err != nil && !errors.Is(err, keepassxc.ErrNoLogins) {
+			return fallback
+		}
+		s.hosts[host] = logins
+	}
+	l, err := pick(logins, host, user)
+	if err != nil {
+		return fallback
+	}
+	if !s.groupsSet {
+		s.groupsSet = true
+		_ = s.ask(ctx, func(actx context.Context) error {
+			var err error
+			s.groups, err = s.client.Groups(actx)
+			return err
+		})
+	}
+	title := l.Name
+	if title == "" {
+		title = "https://" + host
+	}
+	if g := groupPath(s.groups, l.Group); g != "" {
+		return g + "/" + title
+	}
+	return title
+}
+
+// groupPath is the path from the root to the one group called name; name
+// alone when there is no such group or more than one.
+func groupPath(groups []keepassxc.Group, name string) string {
+	var found []string
+	var walk func(gs []keepassxc.Group, parent string)
+	walk = func(gs []keepassxc.Group, parent string) {
+		for _, g := range gs {
+			p := g.Name
+			if parent != "" {
+				p = parent + "/" + g.Name
+			}
+			if g.Name == name {
+				found = append(found, p)
+			}
+			walk(g.Children, p)
+		}
+	}
+	if name != "" {
+		walk(groups, "")
+	}
+	if len(found) == 1 {
+		return found[0]
+	}
+	return name
 }

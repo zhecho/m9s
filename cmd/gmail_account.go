@@ -177,6 +177,8 @@ func readGmailSignIn(ctx context.Context, acct *config.Account) (string, string,
 	if err != nil {
 		return "", "", fmt.Errorf("token from KeePassXC: %w", err)
 	}
+	ui.AppLog.Info("[%s] KeePassXC entries: %s (client secret), %s (token)", acct.Name,
+		s.Where(ctx, creds.GmailClientHost, acct.Gmail.ClientID), s.Where(ctx, creds.GmailTokenHost, acct.Gmail.User))
 	return secret, token, nil
 }
 

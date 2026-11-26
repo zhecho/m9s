@@ -838,8 +838,17 @@ Do this once, so the background save can write to the entry without you:
    tries again every hour. The next try after you unlock saves it.
 
 To check it works, open the log (`l`) after the first sync: a working save
-logs `[<account>] Microsoft sign-in saved to KeePassXC`, and a failed one logs
+logs `[<account>] Microsoft sign-in saved to KeePassXC: <path>`, and a failed one logs
 `Microsoft sign-in not saved to KeePassXC (trying again in an hour): <reason>`.
+`<path>` is where the entry is in your database: its groups from the root,
+then its title (`Root/Email/Work/graph.microsoft.com`). KeePassXC tells m9s
+only the name of an entry's own group, so m9s finds the rest in the group
+tree; when two groups have that name, only the name is shown, and an entry
+it cannot place is shown as `https://<host> / <user>`. Reading a sign-in
+again later logs `KeePassXC entry: <path>` the same way. While KeePassXC is
+slow to answer, the log says which entry m9s is waiting for:
+
+`Waiting for KeePassXC — allow m9s access to the entry for <user> on https://<host> if it asks…`
 After 7 days without a save the status bar says
 `Microsoft sign-in not saved for N days — unlock KeePassXC`. If nothing is
 saved for 90 days, the token in KeePassXC expires and you have to run

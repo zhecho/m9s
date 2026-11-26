@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -303,5 +304,32 @@ func TestSetLoginErrors(t *testing.T) {
 	s.set(func() { s.locked = false })
 	if err := c.SetLogin(ctx1s(t), "https://x", "u", "p", "", Association{ID: "nope"}); err == nil {
 		t.Error("unknown association: want an error")
+	}
+}
+
+func TestClient_groupsReturnsTheTree(t *testing.T) {
+	s := newFakeServer(t)
+	tree := []Group{{Name: "Root", UUID: "r", Children: []Group{
+		{Name: "Email", UUID: "e", Children: []Group{{Name: "Work", UUID: "w"}}},
+		{Name: "Banking", UUID: "b"},
+	}}}
+	s.groups = tree
+	c := dial(t, s)
+	associated(t, s, c)
+	got, err := c.Groups(ctx1s(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, tree) {
+		t.Errorf("groups = %+v, want %+v", got, tree)
+	}
+}
+
+func TestClient_groupsNeedAnApprovedConnection(t *testing.T) {
+	s := newFakeServer(t)
+	c := dial(t, s)
+	var pe *ProtocolError
+	if _, err := c.Groups(ctx1s(t)); !errors.As(err, &pe) {
+		t.Errorf("err = %v, want KeePassXC's refusal", err)
 	}
 }

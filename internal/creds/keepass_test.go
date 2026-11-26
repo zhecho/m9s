@@ -22,6 +22,9 @@ type fakeClient struct {
 	slow        map[string]bool // methods that wait for their context, like KeePassXC behind a dialog
 	logins      map[string][]keepassxc.Login
 	loginsErr   map[string][]error // consumed in order before logins is used
+	groups      []keepassxc.Group
+	groupsErr   error
+	groupsCalls int
 
 	sets                            []setCall
 	setErr                          error
@@ -131,6 +134,13 @@ func (f *fakeClient) Logins(ctx context.Context, url string, a keepassxc.Associa
 }
 
 func (f *fakeClient) Close() error { f.closes++; return nil }
+
+func (f *fakeClient) Groups(ctx context.Context) ([]keepassxc.Group, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.groupsCalls++
+	return f.groups, f.groupsErr
+}
 
 type setCall struct{ url, login, password, uuid string }
 
@@ -530,7 +540,7 @@ func TestSession_slowAnswerShowsANoticeAfterAWhile(t *testing.T) {
 	r.s.NoticeDelay = 50 * time.Millisecond
 	r.s.Password(bg, "mail.x.io", "a@x.io")
 	n := r.noticed()
-	if len(n) != 2 || n[0] != "Waiting for KeePassXC — allow m9s access to the entry if it asks…" || n[1] != "" {
+	if len(n) != 2 || n[0] != "Waiting for KeePassXC — allow m9s access to the entry for a@x.io on https://mail.x.io if it asks…" || n[1] != "" {
 		t.Errorf("notices = %q, want the access hint and then its removal", n)
 	}
 	if !r.s.Waited() {
@@ -700,5 +710,85 @@ func TestSaveLoginQuiet_notRunning(t *testing.T) {
 	r.dialErr = keepassxc.ErrNotRunning
 	if err := r.s.SaveLoginQuiet(bg, "graph.microsoft.com", "me@outlook.com", "tok"); !errors.Is(err, keepassxc.ErrNotRunning) {
 		t.Fatalf("err = %v, want ErrNotRunning", err)
+	}
+}
+
+// tree is a database with Root/Email/Work, and two groups called Misc.
+var tree = []keepassxc.Group{{Name: "Root", Children: []keepassxc.Group{
+	{Name: "Email", Children: []keepassxc.Group{{Name: "Work"}, {Name: "Misc"}}},
+	{Name: "Misc"},
+}}}
+
+func TestGroupPath(t *testing.T) {
+	for name, want := range map[string]string{
+		"Work": "Root/Email/Work", "Root": "Root", "Misc": "Misc", "Gone": "Gone", "": "",
+	} {
+		if got := groupPath(tree, name); got != want {
+			t.Errorf("groupPath(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestSession_whereIsTheEntrysPathInTheDatabase(t *testing.T) {
+	r := newRig()
+	r.c.logins["https://graph.x.io"] = []keepassxc.Login{{Name: "ms token", User: "a@x.io", Password: "t", Group: "Work"}}
+	r.c.groups = tree
+	if _, err := r.s.Password(bg, "graph.x.io", "a@x.io"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.s.Where(bg, "graph.x.io", "a@x.io"); got != "Root/Email/Work/ms token" {
+		t.Errorf("Where = %q, want Root/Email/Work/ms token", got)
+	}
+	r.s.Where(bg, "graph.x.io", "a@x.io")
+	if r.c.loginsCalls != 1 || r.c.groupsCalls != 1 {
+		t.Errorf("asked KeePassXC for logins %d and groups %d times, want once each", r.c.loginsCalls, r.c.groupsCalls)
+	}
+}
+
+func TestSession_whereFallsBack(t *testing.T) {
+	r := newRig()
+	r.c.logins["https://graph.x.io"] = []keepassxc.Login{{Name: "ms token", User: "a@x.io", Password: "t", Group: "Misc"}}
+	r.c.groups = tree
+	r.s.Password(bg, "graph.x.io", "a@x.io")
+	if got := r.s.Where(bg, "graph.x.io", "a@x.io"); got != "Misc/ms token" {
+		t.Errorf("group name not unique: Where = %q, want Misc/ms token", got)
+	}
+	if got := r.s.Where(bg, "graph.x.io", "b@x.io"); got != "https://graph.x.io / b@x.io" {
+		t.Errorf("no such entry: Where = %q, want the URL and user", got)
+	}
+
+	r = newRig()
+	r.c.logins["https://graph.x.io"] = []keepassxc.Login{{Name: "ms token", User: "a@x.io", Password: "t", Group: "Work"}}
+	r.c.groupsErr = errors.New("old KeePassXC")
+	r.s.Password(bg, "graph.x.io", "a@x.io")
+	if got := r.s.Where(bg, "graph.x.io", "a@x.io"); got != "Work/ms token" {
+		t.Errorf("no group tree: Where = %q, want Work/ms token", got)
+	}
+}
+
+func TestSession_whereAfterASaveIsTheEntrySaved(t *testing.T) {
+	r := newRig()
+	r.c.groups = tree
+	if err := r.s.SaveLogin(bg, "graph.x.io", "a@x.io", "t"); err != nil {
+		t.Fatal(err)
+	}
+	r.c.logins["https://graph.x.io"][0].Name, r.c.logins["https://graph.x.io"][0].Group = "graph.x.io", "Work"
+	if got := r.s.Where(bg, "graph.x.io", "a@x.io"); got != "Root/Email/Work/graph.x.io" {
+		t.Errorf("after creating it: Where = %q, want the new entry's path", got)
+	}
+}
+
+func TestSession_whereAfterAQuietSaveAsksNoMore(t *testing.T) {
+	r := newRig()
+	r.c.logins["https://graph.x.io"] = []keepassxc.Login{{Name: "ms token", User: "a@x.io", Password: "old", UUID: "u1", Group: "Work"}}
+	r.c.groups = tree
+	if err := r.s.SaveLoginQuiet(bg, "graph.x.io", "a@x.io", "new"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.s.Where(bg, "graph.x.io", "a@x.io"); got != "Root/Email/Work/ms token" {
+		t.Errorf("Where = %q, want the updated entry's path", got)
+	}
+	if r.c.loginsCalls != 1 {
+		t.Errorf("asked for logins %d times; a quiet save asks once", r.c.loginsCalls)
 	}
 }

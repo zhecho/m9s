@@ -74,6 +74,7 @@ func readMicrosoftSignIn(ctx context.Context, acct *config.Account) (string, err
 	if err != nil {
 		return "", fmt.Errorf("token from KeePassXC: %w", err)
 	}
+	ui.AppLog.Info("[%s] KeePassXC entry: %s", acct.Name, s.Where(ctx, creds.MicrosoftTokenHost, acct.Microsoft.User))
 	return token, nil
 }
 

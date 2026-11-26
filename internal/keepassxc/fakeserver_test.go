@@ -30,6 +30,7 @@ type fakeServer struct {
 	seen               []string           // every url asked for
 	unlockAsked        []bool             // triggerUnlock of every get-databasehash
 	setLogins          []map[string]any   // decrypted body of every set-login
+	groups             []Group            // the database's group tree, root first
 	nextUUID           int
 	conns              []net.Conn
 }
@@ -96,6 +97,7 @@ func (s *fakeServer) serve(c net.Conn) {
 	var clientPub [32]byte
 	pub, priv, _ := box.GenerateKey(rand.Reader)
 	send := func(v map[string]any) { json.NewEncoder(c).Encode(v) }
+	associatedHere := false // KeePassXC answers group questions only on an approved connection
 	for {
 		var req map[string]any
 		if dec.Decode(&req) != nil {
@@ -161,9 +163,11 @@ func (s *fakeServer) serve(c net.Conn) {
 		case "associate":
 			key, _ := body["idKey"].(string)
 			s.assoc[s.assocName] = key
+			associatedHere = true
 			reply(map[string]any{"id": s.assocName, "hash": "abc", "success": "true"})
 		case "test-associate":
 			if known(body["id"], body["key"]) {
+				associatedHere = true
 				reply(map[string]any{"id": body["id"], "success": "true"})
 			} else {
 				fail("8", "KeePassXC association failed, try again")
@@ -196,6 +200,16 @@ func (s *fakeServer) serve(c net.Conn) {
 						"password": l.Password, "uuid": l.UUID, "group": l.Group})
 				}
 				reply(map[string]any{"count": len(entries), "entries": entries, "success": "true"})
+			}
+		case "get-database-groups":
+			switch {
+			case s.locked:
+				fail("1", "Database not opened")
+			case !associatedHere:
+				fail("8", "KeePassXC association failed, try again")
+			default:
+				// As KeePassXC nests it: {"groups": {"groups": [root]}}.
+				reply(map[string]any{"groups": map[string]any{"groups": s.groups}, "success": "true"})
 			}
 		case "set-login":
 			s.setLogins = append(s.setLogins, body)

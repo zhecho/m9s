@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"github.com/zhecho/m9s/internal/ui"
 	"testing"
 	"time"
 
@@ -29,12 +30,12 @@ type saverRig struct {
 func newSaverRig() *saverRig {
 	r := &saverRig{now: time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC), store: &memSaved{}}
 	r.s = &tokenSaver{account: "ms",
-		save: func(_ context.Context, tok string) error {
+		save: func(_ context.Context, tok string) (string, error) {
 			if r.err != nil {
-				return r.err
+				return "", r.err
 			}
 			r.saved = append(r.saved, tok)
-			return nil
+			return "Root/Email/ms token", nil
 		},
 		store: r.store, now: func() time.Time { return r.now }, warn: func(s string) { r.warns = append(r.warns, s) },
 	}
@@ -120,4 +121,18 @@ func TestTokenSaver_noWarningWhenSaved(t *testing.T) {
 	if len(r.warns) != 0 {
 		t.Fatalf("warned although the save worked: %q", r.warns)
 	}
+}
+
+// The log names the entry the sign-in was saved to, by its path.
+func TestTokenSaver_savedLineNamesTheEntry(t *testing.T) {
+	r := newSaverRig()
+	r.s.Rotated("a")
+	r.s.Tick(context.Background())
+	want := "[ms] Microsoft sign-in saved to KeePassXC: Root/Email/ms token"
+	for _, e := range ui.AppLog.Entries() {
+		if e.Msg == want {
+			return
+		}
+	}
+	t.Errorf("no log line %q", want)
 }
