@@ -292,6 +292,18 @@ func (c *Client) Profile(ctx context.Context) (email string, historyID string, e
 	return p.EmailAddress, p.HistoryID, nil
 }
 
+// MessagesTotal returns how many messages the mailbox holds, Spam and Trash
+// included (1 quota unit).
+func (c *Client) MessagesTotal(ctx context.Context) (int, error) {
+	var p struct {
+		MessagesTotal int `json:"messagesTotal"`
+	}
+	if err := c.getJSON(ctx, "/profile", &p); err != nil {
+		return 0, err
+	}
+	return p.MessagesTotal, nil
+}
+
 // transportErr converts a transport/refresh failure into an error that never
 // contains an HTTP body.
 func (c *Client) transportErr(ctx context.Context, err error) error {

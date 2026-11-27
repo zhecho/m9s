@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -54,6 +55,22 @@ func (m *apiMessage) meta() *MsgMeta {
 // (any label when "") and matching query (Gmail search syntax, may be ""),
 // newest first, and the token of the next page ("" on the last).
 func (c *Client) ListMessageIDs(ctx context.Context, labelID, query, pageToken string) (ids []string, next string, err error) {
+	refs, next, err := c.ListMessageRefs(ctx, labelID, query, pageToken)
+	if err != nil {
+		return nil, "", err
+	}
+	ids = make([]string, len(refs))
+	for i, r := range refs {
+		ids[i] = r.ID
+	}
+	return ids, next, nil
+}
+
+// MsgRef is a message as a listing names it.
+type MsgRef struct{ ID, ThreadID string }
+
+// ListMessageRefs is ListMessageIDs with each message's conversation.
+func (c *Client) ListMessageRefs(ctx context.Context, labelID, query, pageToken string) (refs []MsgRef, next string, err error) {
 	v := url.Values{"maxResults": {strconv.Itoa(listPageSize)}}
 	if labelID != "" {
 		v.Set("labelIds", labelID)
@@ -69,19 +86,23 @@ func (c *Client) ListMessageIDs(ctx context.Context, labelID, query, pageToken s
 	}
 	var out struct {
 		Messages []struct {
-			ID string `json:"id"`
+			ID       string `json:"id"`
+			ThreadID string `json:"threadId"`
 		} `json:"messages"`
 		NextPageToken string `json:"nextPageToken"`
 	}
 	if err := c.getJSON(ctx, "/messages?"+v.Encode(), &out); err != nil {
 		return nil, "", err
 	}
-	ids = make([]string, 0, len(out.Messages))
+	refs = make([]MsgRef, 0, len(out.Messages))
 	for _, m := range out.Messages {
-		ids = append(ids, m.ID)
+		refs = append(refs, MsgRef{ID: m.ID, ThreadID: m.ThreadID})
 	}
-	return ids, out.NextPageToken, nil
+	return refs, out.NextPageToken, nil
 }
+
+// ListPageSize is how many messages one ListMessageIDs page names at most.
+const ListPageSize = listPageSize
 
 func msgPath(id string) string { return "/messages/" + url.PathEscape(id) }
 
@@ -133,6 +154,25 @@ func (c *Client) Modify(ctx context.Context, id string, add, remove []string) er
 		Remove []string `json:"removeLabelIds,omitempty"`
 	}{add, remove}
 	return c.sendJSON(ctx, http.MethodPost, msgPath(id)+"/modify", in, nil, true)
+}
+
+// BatchModifyMax is the most ids Gmail takes in one batchModify.
+const BatchModifyMax = 1000
+
+// BatchModify adds and removes labels on messages, at most BatchModifyMax
+// per call. Adding TRASH moves them to the Trash, as Trash does.
+func (c *Client) BatchModify(ctx context.Context, ids, add, remove []string) error {
+	for part := range slices.Chunk(ids, BatchModifyMax) {
+		in := struct {
+			IDs    []string `json:"ids"`
+			Add    []string `json:"addLabelIds,omitempty"`
+			Remove []string `json:"removeLabelIds,omitempty"`
+		}{part, add, remove}
+		if err := c.sendJSON(ctx, http.MethodPost, "/messages/batchModify", in, nil, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Trash moves a message to the Trash.

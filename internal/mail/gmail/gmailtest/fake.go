@@ -55,10 +55,10 @@ func New() *Fake {
 	}
 	f.Handle("/gmail/v1/users/me/profile", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
-		e, h := f.Email, f.History
+		e, h, n := f.Email, f.History, len(f.mb.msgs)
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"emailAddress":%q,"historyId":%q}`, e, h)
+		fmt.Fprintf(w, `{"emailAddress":%q,"historyId":%q,"messagesTotal":%d}`, e, h, n)
 	})
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	return f

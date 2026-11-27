@@ -131,7 +131,7 @@ func TestHelpCommand_opensAndClosesHelp(t *testing.T) {
 func TestHelpView_drawsLogoAndShortcuts(t *testing.T) {
 	ra := commandApp(t)
 	ra.showHelp()
-	lines := drawMainPage(t, ra, 120, 60) // the contents pane narrows the columns
+	lines := drawMainPage(t, ra, 120, 62) // the contents pane narrows the columns
 	screen := strings.Join(lines, "\n")
 	for _, want := range []string{ui.Logo()[1], "HELP", "GENERAL", "MESSAGES", "<:help>", "<:config>", "<?>"} {
 		if !strings.Contains(screen, want) {

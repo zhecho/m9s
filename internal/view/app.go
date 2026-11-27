@@ -679,7 +679,7 @@ func (ra *RootApp) wireKeys() {
 			case ui.ActionSearchLocal:
 				ra.startLogPaneFilter()
 				return nil
-			case ui.ActionTabCycle, ui.ActionLog, ui.ActionCommandBar, ui.ActionHelp, ui.ActionBack, ui.ActionSync,
+			case ui.ActionTabCycle, ui.ActionTabCycleBack, ui.ActionLog, ui.ActionCommandBar, ui.ActionHelp, ui.ActionBack, ui.ActionSync,
 				ui.ActionSwitchAccountNext, ui.ActionSwitchAccountPrev, ui.ActionCompose, ui.ActionSearchServer:
 				// handled below, as anywhere
 			default:
@@ -839,6 +839,9 @@ func (ra *RootApp) wireKeys() {
 		case ui.ActionTabCycle:
 			ra.cycleFocus()
 			return nil
+		case ui.ActionTabCycleBack:
+			ra.cycleFocusBack()
+			return nil
 		case ui.ActionLog:
 			ra.toggleLog()
 			return nil
@@ -892,6 +895,24 @@ func (ra *RootApp) cycleFocus() {
 		ra.uiApp.SetFocus(ra.folders)
 	default:
 		ra.uiApp.SetFocus(ra.folders)
+	}
+}
+
+// cycleFocusBack is shift-tab: cycleFocus the other way round.
+func (ra *RootApp) cycleFocusBack() {
+	switch ra.uiApp.GetFocus() {
+	case ra.maillist:
+		ra.uiApp.SetFocus(ra.folders)
+	case ra.preview:
+		ra.uiApp.SetFocus(ra.maillist)
+	case ra.folders:
+		if ra.logPane != nil {
+			ra.uiApp.SetFocus(ra.logPane)
+			return
+		}
+		ra.uiApp.SetFocus(ra.preview)
+	default: // the log pane, or a pane cycleFocus does not reach
+		ra.uiApp.SetFocus(ra.preview)
 	}
 }
 

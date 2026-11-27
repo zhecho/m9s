@@ -267,6 +267,56 @@ func TestDeleteOnConversationTrashesThread(t *testing.T) {
 	}
 }
 
+// bulkThreads trashes conversations in bulk; "T2" was deleted meanwhile.
+type bulkThreads struct{ stubThreads }
+
+func (s *bulkThreads) TrashThreadsMany(_ context.Context, threadIDs []string, progress func(int)) map[string]error {
+	s.record("TrashThreadsMany " + strings.Join(threadIDs, ","))
+	progress(len(threadIDs))
+	return map[string]error{"T2": errors.New("not found")}
+}
+
+// Marked conversation rows go to the trash as wholes in one bulk call; a
+// row with no conversation goes alone, and the failed row stays marked.
+func TestDelete_markedConversationsInBulk(t *testing.T) {
+	ra := newWiredRootApp(t, "test")
+	stub := &bulkThreads{}
+	stub.rows = []*mail.Envelope{
+		{ID: "a", ThreadID: "T1", Subject: "one"},
+		{ID: "b", ThreadID: "T2", Subject: "two"},
+		{ID: "c", Subject: "alone"},
+	}
+	ra.engines["test"] = stub
+	ra.handleEvent(msync.FoldersUpdated{AccountName: "test", Folders: testFolders("INBOX", "Sent", "Trash")})
+	ra.uiApp.SetFocus(ra.maillist)
+	ra.showEnvelopes(onScreen(stub.rows))
+	queued := make(chan func(), 16)
+	ra.deliver = func(fn func()) { queued <- fn }
+	for i := range 3 {
+		ra.maillist.ToggleMark(i)
+	}
+	sendRune(ra, 'd')
+	ra.testDeleteModalDone(0, "Delete")
+
+	want := "Moved 2 conversations to Trash; 1 failed"
+	deadline := time.After(2 * time.Second)
+	for !strings.Contains(ra.uiApp.StatusBar.FlashText(), want) {
+		select {
+		case fn := <-queued:
+			fn()
+		case <-deadline:
+			t.Fatalf("status = %q, want %q", ra.uiApp.StatusBar.FlashText(), want)
+		}
+	}
+	if calls := stub.called(); !slices.Contains(calls, "TrashThreadsMany T1,T2") || !slices.Contains(calls, "MoveToTrash INBOX c") ||
+		slices.ContainsFunc(calls, func(c string) bool { return strings.HasPrefix(c, "TrashThread ") }) {
+		t.Errorf("calls = %q, want one bulk call and c alone", calls)
+	}
+	if got := markedIDs(ra.maillist); !slices.Equal(got, []string{"b"}) {
+		t.Errorf("still marked = %v, want the failed one", got)
+	}
+}
+
 func TestConversationRowActionsApplyToThread(t *testing.T) {
 	ra, stub := gmailApp(t)
 	sendRune(ra, 'u')

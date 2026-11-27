@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -257,6 +258,7 @@ type batchReq struct {
 	Method  string            `json:"method"`
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers"`
+	Body    json.RawMessage   `json:"body,omitempty"`
 }
 
 type batchResp struct {
@@ -283,57 +285,105 @@ func (c *Client) PermanentDeleteAll(ctx context.Context, ids []string) error {
 }
 
 func (c *Client) deleteBatch(ctx context.Context, ids []string) error {
-	pending := ids
+	reqs := make([]batchReq, len(ids))
+	for i, id := range ids {
+		reqs[i] = batchReq{Method: http.MethodPost, URL: msgPath(id) + "/permanentDelete",
+			Headers: map[string]string{"Prefer": immutableIDs}}
+	}
+	errs, err := c.runBatch(ctx, reqs)
+	if err != nil {
+		return err
+	}
+	for _, err := range errs {
+		var ae *APIError
+		if err != nil && !(errors.As(err, &ae) && alreadyDeleted(ae.Code, ae.Status)) {
+			return err
+		}
+	}
+	return nil
+}
+
+// MoveAll moves messages to folderID, batchMax per $batch request, and
+// returns each one's error (nil when moved), in the order of ids. Ids stay
+// the same (immutable ids), as on Move. A $batch that fails as a whole
+// fails each of its messages.
+func (c *Client) MoveAll(ctx context.Context, ids []string, folderID string) []error {
+	body, _ := json.Marshal(map[string]string{"destinationId": folderID})
+	out := make([]error, 0, len(ids))
+	for start := 0; start < len(ids); start += batchMax {
+		part := ids[start:min(start+batchMax, len(ids))]
+		reqs := make([]batchReq, len(part))
+		for i, id := range part {
+			reqs[i] = batchReq{Method: http.MethodPost, URL: msgPath(id) + "/move", Body: body,
+				Headers: map[string]string{"Prefer": immutableIDs, "Content-Type": "application/json"}}
+		}
+		errs, err := c.runBatch(ctx, reqs)
+		if err != nil {
+			errs = make([]error, len(part))
+			for i := range errs {
+				errs[i] = err
+			}
+		}
+		out = append(out, errs...)
+	}
+	return out
+}
+
+// runBatch sends reqs (batchMax at most) as one $batch and returns each
+// one's error, nil for a 2xx. Graph runs a batch's requests side by side
+// and may throttle some of them: only those are sent again, after the
+// longest Retry-After asked for. err is the $batch request's own failure.
+func (c *Client) runBatch(ctx context.Context, reqs []batchReq) (errs []error, err error) {
+	errs = make([]error, len(reqs))
+	pending := make([]int, len(reqs)) // indexes into reqs
+	for i := range pending {
+		pending[i] = i
+	}
 	for try := 0; ; try++ {
 		in := struct {
 			Requests []batchReq `json:"requests"`
 		}{}
-		for i, id := range pending {
-			in.Requests = append(in.Requests, batchReq{
-				ID: itoa(i), Method: http.MethodPost, URL: msgPath(id) + "/permanentDelete",
-				Headers: map[string]string{"Prefer": immutableIDs},
-			})
+		for _, i := range pending {
+			r := reqs[i]
+			r.ID = itoa(i)
+			in.Requests = append(in.Requests, r)
 		}
 		var out struct {
 			Responses []batchResp `json:"responses"`
 		}
 		if err := c.sendJSON(ctx, http.MethodPost, "/$batch", in, &out, true); err != nil {
-			return err
+			return nil, err
 		}
-		var again []string
+		var again []int
 		var wait time.Duration
-		var lastErr error
-		answered := 0
+		answered := map[int]bool{}
 		for _, r := range out.Responses {
 			i, err := strconv.Atoi(r.ID)
-			if err != nil || i < 0 || i >= len(pending) {
+			if err != nil || !slices.Contains(pending, i) || answered[i] {
 				continue
 			}
-			answered++
-			switch {
-			case r.Status/100 == 2 || alreadyDeleted(r.Status, errorCode(r.Body)):
-			case retryable(r.Status):
-				again = append(again, pending[i])
+			answered[i] = true
+			errs[i] = nil
+			if r.Status/100 == 2 {
+				continue
+			}
+			errs[i] = &APIError{Code: r.Status, Status: errorCode(r.Body)}
+			if retryable(r.Status) {
+				again = append(again, i)
 				wait = max(wait, retryAfter(r.Headers["Retry-After"]))
-				lastErr = &APIError{Code: r.Status, Status: errorCode(r.Body)}
-			default:
-				return &APIError{Code: r.Status, Status: errorCode(r.Body)}
 			}
 		}
-		if answered != len(pending) {
-			return fmt.Errorf("graph: $batch answered %d of %d requests", answered, len(pending))
+		if len(answered) != len(pending) {
+			return nil, fmt.Errorf("graph: $batch answered %d of %d requests", len(answered), len(pending))
 		}
-		if len(again) == 0 {
-			return nil
-		}
-		if try == maxTries-1 {
-			return lastErr
+		if len(again) == 0 || try == maxTries-1 {
+			return errs, nil
 		}
 		if wait == 0 {
 			wait = backoff(try)
 		}
 		if err := c.sleep(ctx, wait); err != nil {
-			return err
+			return nil, err
 		}
 		pending = again
 	}

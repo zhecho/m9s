@@ -42,6 +42,7 @@ func helpSections(km ui.KeyMap) []helpSection {
 			{"j/k ↓/↑", "Navigate"},
 			{"g/G", "Top/Bottom"},
 			{"tab", "Next pane (log pane too)"},
+			{"shift-tab", "Previous pane"},
 			{k(ui.ActionSwitchAccountPrev), "Previous account"},
 			{k(ui.ActionSwitchAccountNext), "Next account"},
 			{k(ui.ActionCommandBar), "Command"},

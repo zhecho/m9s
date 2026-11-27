@@ -285,6 +285,22 @@ func (f *Fake) mailboxHandler(w http.ResponseWriter, r *http.Request, body []byt
 			f.removeLocked(id)
 		}
 		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodPost && len(parts) == 2 && parts[0] == "messages" && parts[1] == "batchModify":
+		var in struct{ IDs, AddLabelIDs, RemoveLabelIDs []string }
+		if json.Unmarshal(body, &in) != nil || len(in.IDs) == 0 || len(in.IDs) > 1000 {
+			badRequest(w)
+			return
+		}
+		for _, id := range in.IDs { // all or nothing: one unknown id fails the lot
+			if _, ok := f.mb.msgs[id]; !ok {
+				notFound(w)
+				return
+			}
+		}
+		for _, id := range in.IDs {
+			f.modifyLocked(id, in.AddLabelIDs, in.RemoveLabelIDs)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "messages" && parts[2] == "modify":
 		var in struct{ AddLabelIDs, RemoveLabelIDs []string }
 		if json.Unmarshal(body, &in) != nil {

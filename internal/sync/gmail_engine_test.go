@@ -941,6 +941,129 @@ func TestGmailEngine_PermanentDeleteManyBatchesInTrashOnly(t *testing.T) {
 	}
 }
 
+// threadTrashRequests counts threads.trash calls: one per conversation,
+// 20 quota units each.
+func threadTrashRequests(f *gmailtest.Fake) int {
+	n := 0
+	for _, r := range f.Requests() {
+		if strings.HasPrefix(r.Path, "/gmail/v1/users/me/threads/") && strings.HasSuffix(r.Path, "/trash") {
+			n++
+		}
+	}
+	return n
+}
+
+// threeConversations seeds T1 (in the Inbox, an archived reply no label
+// holds, a copy in Spam), T2 and T3 (one Inbox message each), and a
+// message of no selected conversation.
+func threeConversations(ids map[string]string) func(f *gmailtest.Fake) {
+	return func(f *gmailtest.Fake) {
+		add := func(name, thread string, labels ...string) {
+			ids[name] = f.AddMessage(gmailtest.Message{ThreadID: thread, LabelIDs: labels, Raw: gRaw(name, name+"@x")})
+		}
+		add("t1", "T1", "INBOX", "Label_1")
+		add("t1archived", "T1")
+		add("t1spam", "T1", "SPAM")
+		add("t2", "T2", "INBOX", "UNREAD")
+		add("t3", "T3", "INBOX")
+		add("other", "T4", "INBOX")
+	}
+}
+
+// Many conversations go to Trash after one listing of the mailbox, with
+// one batchModify, not a threads.trash each: messages no synced label holds
+// go too, and the rows move at once.
+func TestGmailEngine_TrashThreadsManyBatches(t *testing.T) {
+	ids := map[string]string{}
+	h := newGmail(t, threeConversations(ids))
+	h.synced()
+
+	bulk, ok := msync.Account(h.eng).(msync.BulkThreadTrasher)
+	if !ok {
+		t.Fatal("the Gmail engine does not trash conversations in bulk")
+	}
+	reached := 0
+	failed := bulk.TrashThreadsMany(context.Background(), []string{"T1", "T2", "T3"}, func(n int) { reached += n })
+
+	if len(failed) != 0 {
+		t.Fatalf("failed = %v", failed)
+	}
+	for _, name := range []string{"t1", "t1archived", "t2", "t3"} {
+		if m, _ := h.f.Message(ids[name]); !slices.Contains(m.LabelIDs, "TRASH") {
+			t.Errorf("%s labels = %v, want TRASH", name, m.LabelIDs)
+		}
+	}
+	for _, name := range []string{"t1spam", "other"} {
+		if m, _ := h.f.Message(ids[name]); slices.Contains(m.LabelIDs, "TRASH") {
+			t.Errorf("%s was trashed: %v", name, m.LabelIDs)
+		}
+	}
+	if n := h.f.Count("/gmail/v1/users/me/messages/batchModify"); n != 1 || threadTrashRequests(h.f) != 0 {
+		t.Errorf("%d batchModify, %d threads.trash; want one batchModify", n, threadTrashRequests(h.f))
+	}
+	if reached != 3 {
+		t.Errorf("progress reached %d, want 3", reached)
+	}
+	if got := h.ids("INBOX"); !slices.Equal(got, []string{ids["other"]}) {
+		t.Errorf("INBOX rows = %v right after the call, want only the other one", got)
+	}
+	if got := h.ids("Work"); len(got) != 0 {
+		t.Errorf("Work rows = %v still list trashed mail", got)
+	}
+}
+
+// Two conversations cost less one by one than a listing of the mailbox.
+func TestGmailEngine_TrashThreadsManyFewGoOneByOne(t *testing.T) {
+	ids := map[string]string{}
+	h := newGmail(t, threeConversations(ids))
+	h.synced()
+	lists := h.f.Count("/gmail/v1/users/me/messages")
+
+	failed := msync.Account(h.eng).(msync.BulkThreadTrasher).TrashThreadsMany(context.Background(),
+		[]string{"T2", "T3"}, func(int) {})
+
+	if len(failed) != 0 {
+		t.Fatalf("failed = %v", failed)
+	}
+	if n := threadTrashRequests(h.f); n != 2 {
+		t.Errorf("%d threads.trash, want 2", n)
+	}
+	if n := h.f.Count("/gmail/v1/users/me/messages") - lists; n != 0 {
+		t.Errorf("%d listings for two conversations", n)
+	}
+	if n := h.f.Count("/gmail/v1/users/me/messages/batchModify"); n != 0 {
+		t.Errorf("%d batchModify for two conversations", n)
+	}
+}
+
+// Gmail refuses a whole batchModify over one bad id: its conversations are
+// then trashed one by one, and one gone fails alone.
+func TestGmailEngine_TrashThreadsManyFallsBackOnARefusedBatch(t *testing.T) {
+	ids := map[string]string{}
+	h := newGmail(t, threeConversations(ids))
+	h.synced()
+	h.f.Queue("/gmail/v1/users/me/messages/batchModify", http.StatusNotFound, `{"error":{"code":404,"status":"NOT_FOUND"}}`)
+
+	reached := 0
+	failed := msync.Account(h.eng).(msync.BulkThreadTrasher).TrashThreadsMany(context.Background(),
+		[]string{"T1", "T2", "T3", "GONE"}, func(n int) { reached += n })
+
+	if len(failed) != 1 || !errors.Is(failed["GONE"], gmail.ErrNotFound) {
+		t.Fatalf("failed = %v, want only GONE, not found", failed)
+	}
+	for _, name := range []string{"t1", "t1archived", "t2", "t3"} {
+		if m, _ := h.f.Message(ids[name]); !slices.Contains(m.LabelIDs, "TRASH") {
+			t.Errorf("%s labels = %v, want TRASH", name, m.LabelIDs)
+		}
+	}
+	if n := threadTrashRequests(h.f); n != 4 {
+		t.Errorf("%d threads.trash after the refused batch, want 4", n)
+	}
+	if reached != 4 {
+		t.Errorf("progress reached %d, want 4", reached)
+	}
+}
+
 // A label change on a stored message is applied from the history record
 // itself: Gmail sends the labels the message carries now.
 func TestGmailEngine_PollAppliesLabelChangesWithoutFetching(t *testing.T) {

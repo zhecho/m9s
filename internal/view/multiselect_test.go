@@ -2,6 +2,7 @@ package view
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -296,6 +297,47 @@ func TestDelete_markedShowsProgress(t *testing.T) {
 	untilFlash("Deleting 1 of 3 messages…")
 	close(stub.release)
 	untilFlash("Permanently deleted 3 messages")
+}
+
+// bulkMoveStub trashes in bulk; "3" was deleted on another device.
+type bulkMoveStub struct{ moverStub }
+
+func (s *bulkMoveStub) MoveToTrashMany(_ context.Context, folder string, ids []string, progress func(int)) map[string]error {
+	s.record("MoveToTrashMany " + folder + " " + strings.Join(ids, ","))
+	progress(len(ids))
+	return map[string]error{"3": errors.New("not found")}
+}
+
+// Outside the trash, an account that trashes in bulk gets the whole
+// selection in one call; the one it could not move stays selected.
+func TestDelete_markedInBulk(t *testing.T) {
+	stub := &bulkMoveStub{}
+	stub.rows = threeMessages()
+	ra := imapApp(t, stub, stub.rows)
+	queued := make(chan func(), 16)
+	ra.deliver = func(fn func()) { queued <- fn }
+	for i := range 3 {
+		ra.maillist.ToggleMark(i)
+	}
+	sendRune(ra, 'd')
+	ra.testDeleteModalDone(0, "Delete")
+
+	want := "Moved 2 messages to Trash; 1 failed"
+	deadline := time.After(2 * time.Second)
+	for !strings.Contains(ra.uiApp.StatusBar.FlashText(), want) {
+		select {
+		case fn := <-queued:
+			fn()
+		case <-deadline:
+			t.Fatalf("status = %q, want %q", ra.uiApp.StatusBar.FlashText(), want)
+		}
+	}
+	if calls := stub.called(); !slices.Equal(calls, []string{"MoveToTrashMany INBOX 1,2,3"}) {
+		t.Errorf("calls = %q, want one bulk move", calls)
+	}
+	if got := markedIDs(ra.maillist); !slices.Equal(got, []string{"3"}) {
+		t.Errorf("still marked = %v, want the failed one", got)
+	}
 }
 
 // bulkTrashStub deletes in bulk; "3" was restored on another device.

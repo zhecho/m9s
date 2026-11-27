@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tcell "github.com/derailed/tcell/v2"
+	"github.com/derailed/tview"
 	"github.com/zhecho/m9s/internal/config"
 	"github.com/zhecho/m9s/internal/draft"
 	"github.com/zhecho/m9s/internal/mail"
@@ -253,6 +254,31 @@ func TestCycleFocus(t *testing.T) {
 	// cycleFocus from maillist.
 	ra.uiApp.SetFocus(ra.maillist)
 	ra.cycleFocus()
+}
+
+// shift-tab goes through the panes in the reverse of tab's order.
+func TestShiftTabCyclesPanesBack(t *testing.T) {
+	ra := newWiredRootApp(t, "test")
+	ra.uiApp.SetFocus(ra.folders)
+	var forward []tview.Primitive
+	for range 4 {
+		sendKey(ra, tcell.KeyTab)
+		forward = append(forward, ra.uiApp.GetFocus())
+	}
+	ra.uiApp.SetFocus(forward[len(forward)-1])
+	for i := len(forward) - 2; i >= 0; i-- {
+		if ev := sendKey(ra, tcell.KeyBacktab); ev != nil {
+			t.Fatal("shift-tab not consumed")
+		}
+		if got := ra.uiApp.GetFocus(); got != forward[i] {
+			t.Fatalf("shift-tab %d focused %T, want %T", len(forward)-1-i, got, forward[i])
+		}
+	}
+	ra.uiApp.SetFocus(ra.maillist)
+	sendKey(ra, tcell.KeyBacktab)
+	if ra.uiApp.GetFocus() != ra.folders {
+		t.Fatalf("shift-tab from the mail list focused %T, want the folders", ra.uiApp.GetFocus())
+	}
 }
 
 func TestToggleLog_showAndHide(t *testing.T) {

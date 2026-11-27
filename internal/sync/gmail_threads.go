@@ -3,6 +3,8 @@ package sync
 import (
 	"context"
 	"errors"
+	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	gosync "sync"
@@ -127,6 +129,137 @@ func (e *GmailEngine) TrashThread(ctx context.Context, threadID string) error {
 	defer kick(e.pollKick)
 	return e.trashedLocally(e.store.ThreadEnvelopes(e.cfg.Name, threadID))
 }
+
+// TrashThreadsMany moves every message of each conversation to the Trash
+// (BulkThreadTrasher), as TrashThread does one, keyed by thread id. A
+// conversation's messages are not all stored (archived ones, unsynced
+// labels), so when that saves time the mailbox is listed once — ids and
+// conversations only, Spam and Trash left out — and the messages of the
+// conversations get the TRASH label with batchModify, a thousand per
+// request. A few conversations cost less one by one than such a listing.
+func (e *GmailEngine) TrashThreadsMany(ctx context.Context, threadIDs []string, progress func(int)) map[string]error {
+	defer kick(e.pollKick)
+	threadIDs = slices.Compact(slices.Sorted(slices.Values(threadIDs)))
+	failed := make(map[string]error)
+	oneByOne := func(threads []string) {
+		for _, t := range threads {
+			if err := e.TrashThread(ctx, t); err != nil {
+				failed[t] = err
+			}
+			progress(1)
+		}
+	}
+	idsOf, err := e.threadMessageIDs(ctx, threadIDs)
+	if err != nil {
+		if ctx.Err() != nil {
+			for _, t := range threadIDs {
+				failed[t] = ctx.Err()
+			}
+			progress(len(threadIDs))
+			return failed
+		}
+		oneByOne(threadIDs)
+		return failed
+	}
+	var ids, unlisted []string
+	left := make(map[string]int) // messages of a conversation not trashed yet
+	for _, t := range threadIDs {
+		if len(idsOf[t]) == 0 { // gone, or in Trash already: TrashThread tells
+			unlisted = append(unlisted, t)
+			continue
+		}
+		ids = append(ids, idsOf[t]...)
+		left[t] = len(idsOf[t])
+	}
+	threadOf := make(map[string]string, len(ids))
+	for t, ms := range idsOf {
+		for _, id := range ms {
+			threadOf[id] = t
+		}
+	}
+	var again []string // conversations of batches Gmail refused for their ids
+	settled := make(map[string]bool)
+	for part := range slices.Chunk(ids, gmail.BatchModifyMax) {
+		var threads []string // of this batch, each once
+		for _, id := range part {
+			if t := threadOf[id]; !slices.Contains(threads, t) {
+				threads = append(threads, t)
+			}
+		}
+		err := e.api.BatchModify(ctx, part, []string{"TRASH"}, nil)
+		var ae *gmail.APIError
+		switch {
+		case err == nil:
+			for _, id := range part {
+				t := threadOf[id]
+				if left[t]--; left[t] == 0 && !settled[t] {
+					settled[t] = true
+					e.dropAllMail(t)
+					// Trashed on the server (its copies in Spam stay); should
+					// the store fail, the poll this kicks shows it.
+					_ = e.trashedLocally(slices.Collect(maps.Values(e.store.EnvelopesByID(e.cfg.Name, idsOf[t]))))
+					progress(1)
+				}
+			}
+		case ctx.Err() == nil && errors.As(err, &ae) && (ae.Code == http.StatusBadRequest || ae.Code == http.StatusNotFound):
+			// One bad id (deleted meanwhile) fails a whole batch.
+			for _, t := range threads {
+				if !settled[t] {
+					settled[t] = true
+					again = append(again, t)
+				}
+			}
+		default:
+			for _, t := range threads {
+				if !settled[t] {
+					settled[t] = true
+					failed[t] = err
+					progress(1)
+				}
+			}
+		}
+	}
+	oneByOne(append(unlisted, again...))
+	return failed
+}
+
+// threadMessageIDs lists the mailbox once, Spam and Trash left out, and
+// returns the ids of the messages of each of threadIDs — or an error when
+// the listing would take longer than trashing threadIDs one by one (about
+// one request either way, a listing page naming gmail.ListPageSize).
+func (e *GmailEngine) threadMessageIDs(ctx context.Context, threadIDs []string) (map[string][]string, error) {
+	total, err := e.api.MessagesTotal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if pages := (total + gmail.ListPageSize - 1) / gmail.ListPageSize; pages+1 >= len(threadIDs) {
+		return nil, errCheaperOneByOne
+	}
+	want := make(map[string]bool, len(threadIDs))
+	for _, t := range threadIDs {
+		want[t] = true
+	}
+	out := make(map[string][]string, len(threadIDs))
+	token := ""
+	for {
+		refs, next, err := e.api.ListMessageRefs(ctx, "", "", token)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range refs {
+			if want[r.ThreadID] {
+				out[r.ThreadID] = append(out[r.ThreadID], r.ID)
+			}
+		}
+		if next == "" {
+			return out, nil
+		}
+		token = next
+	}
+}
+
+// errCheaperOneByOne says a few conversations are trashed one by one.
+var errCheaperOneByOne = errors.New("cheaper one by one")
 
 // labelID returns the label of a shown folder, or name itself (a label id).
 func (e *GmailEngine) labelID(name string) string {

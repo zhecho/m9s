@@ -74,6 +74,14 @@ func TestKeyMap_LookupTab(t *testing.T) {
 	}
 }
 
+func TestKeyMap_LookupShiftTab(t *testing.T) {
+	km, _ := ui.LoadKeyMap("")
+	ev := tcell.NewEventKey(tcell.KeyBacktab, 0, tcell.ModShift)
+	if km.Lookup(ev) != ui.ActionTabCycleBack {
+		t.Error("shift-tab should return ActionTabCycleBack")
+	}
+}
+
 func TestKeyMap_LookupEnter(t *testing.T) {
 	km, _ := ui.LoadKeyMap("")
 	ev := tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone)

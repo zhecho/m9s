@@ -192,14 +192,23 @@ func (ra *RootApp) moveMarked(acct *mail.Account, eng msync.Account, mv msync.Mo
 // deleteMarked handles d with messages marked: it asks once for all of
 // them. In the trash they are deleted for good (the dialog starts on
 // Cancel), elsewhere they move to the trash; conversations move to the
-// trash as a whole, as one d on a conversation row does.
+// trash as a whole, as one d on a conversation row does. Accounts that can
+// do it in a few requests get the lot at once (BulkDeleter, BulkTrasher,
+// BulkThreadTrasher).
 func (ra *RootApp) deleteMarked(acct *mail.Account, eng msync.Account, folder *mail.Folder, envs []*mail.Envelope) {
 	what := ra.countText(acct, folder, len(envs))
 	trash := eng.TrashFolderName()
 	if th, ok := eng.(msync.Threads); ok && ra.conversationRows(acct.Name, folder.Name) {
 		ra.showDeleteModal(fmt.Sprintf("Move %s to %s?", what, trash), []string{"Delete", "Cancel"}, func() {
-			ra.applyToMarked("delete", acct, eng, folder, envs,
-				func(n int) string { return "Moved " + ra.countText(acct, folder, n) + " to " + trash },
+			done := func(n int) string { return "Moved " + ra.countText(acct, folder, n) + " to " + trash }
+			if bulk, ok := eng.(msync.BulkThreadTrasher); ok { // a few requests for the lot
+				ra.runOnMarked("delete", acct, eng, folder, envs, done,
+					func(ctx context.Context, envs []*mail.Envelope, progress func(int)) map[string]error {
+						return trashConversations(ctx, eng, bulk, folder.Name, envs, progress)
+					}, nil, false)
+				return
+			}
+			ra.applyToMarked("delete", acct, eng, folder, envs, done,
 				func(ctx context.Context, env *mail.Envelope) error {
 					if env.ThreadID == "" {
 						return eng.MoveToTrash(ctx, folder.Name, env.ID)
@@ -238,12 +247,55 @@ func (ra *RootApp) deleteMarked(acct *mail.Account, eng msync.Account, folder *m
 		return
 	}
 	ra.showDeleteModal(fmt.Sprintf("Move %s to %s?", what, trash), []string{"Delete", "Cancel"}, func() {
-		ra.applyToMarked("delete", acct, eng, folder, envs,
-			func(n int) string { return "Moved " + ra.countText(acct, folder, n) + " to " + trash },
+		done := func(n int) string { return "Moved " + ra.countText(acct, folder, n) + " to " + trash }
+		if bulk, ok := eng.(msync.BulkTrasher); ok { // a few requests for the lot
+			ra.runOnMarked("delete", acct, eng, folder, envs, done,
+				func(ctx context.Context, envs []*mail.Envelope, progress func(int)) map[string]error {
+					ids := make([]string, len(envs))
+					for i, env := range envs {
+						ids[i] = env.ID
+					}
+					return bulk.MoveToTrashMany(ctx, folder.Name, ids, progress)
+				}, nil, false)
+			return
+		}
+		ra.applyToMarked("delete", acct, eng, folder, envs, done,
 			func(ctx context.Context, env *mail.Envelope) error {
 				return eng.MoveToTrash(ctx, folder.Name, env.ID)
 			}, nil)
 	})
+}
+
+// trashConversations moves conversation rows to the trash as wholes with
+// one bulk call (a row with no conversation goes alone) and returns the rows
+// that failed, with why.
+func trashConversations(ctx context.Context, eng msync.Account, bulk msync.BulkThreadTrasher, folder string,
+	envs []*mail.Envelope, progress func(int)) map[string]error {
+	failed := make(map[string]error)
+	var threads []string
+	rows := make(map[string][]string) // thread id -> its rows
+	for _, env := range envs {
+		if env.ThreadID == "" {
+			if err := eng.MoveToTrash(ctx, folder, env.ID); err != nil {
+				failed[env.ID] = err
+			}
+			progress(1)
+			continue
+		}
+		if _, seen := rows[env.ThreadID]; !seen {
+			threads = append(threads, env.ThreadID)
+		}
+		rows[env.ThreadID] = append(rows[env.ThreadID], env.ID)
+	}
+	if len(threads) == 0 {
+		return failed
+	}
+	for t, err := range bulk.TrashThreadsMany(ctx, threads, progress) {
+		for _, id := range rows[t] {
+			failed[id] = err
+		}
+	}
+	return failed
 }
 
 // applyToMarked runs op on each of envs off the UI goroutine, one after the

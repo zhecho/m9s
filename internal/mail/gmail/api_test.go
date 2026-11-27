@@ -183,6 +183,53 @@ func TestBatchDeleteChunks(t *testing.T) {
 	}
 }
 
+// batchModify takes a thousand ids at a time; adding TRASH trashes them.
+func TestBatchModifyChunks(t *testing.T) {
+	c, f, _ := newTest(t)
+	var ids []string
+	for range 3 {
+		ids = append(ids, f.AddMessage(gmailtest.Message{LabelIDs: []string{"INBOX"}, Raw: rawMsg("s", "x@y")}))
+	}
+	if err := c.BatchModify(context.Background(), nil, []string{"TRASH"}, nil); err != nil || f.Count("/gmail/v1/users/me/messages/batchModify") != 0 {
+		t.Fatalf("empty batch: err=%v", err)
+	}
+	if err := c.BatchModify(context.Background(), ids, []string{"TRASH"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		if m, _ := f.Message(id); !slices.Contains(m.LabelIDs, "TRASH") {
+			t.Fatalf("%s labels = %v", id, m.LabelIDs)
+		}
+	}
+	many := make([]string, 2500)
+	for i := range many {
+		many[i] = f.AddMessage(gmailtest.Message{LabelIDs: []string{"INBOX"}, Raw: rawMsg("s", "x@y")})
+	}
+	if err := c.BatchModify(context.Background(), many, nil, []string{"INBOX"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.Count("/gmail/v1/users/me/messages/batchModify"); n != 4 {
+		t.Fatalf("calls = %d, want 1 + 3", n)
+	}
+	if m, _ := f.Message(many[2499]); slices.Contains(m.LabelIDs, "INBOX") {
+		t.Fatalf("last of the lot still in INBOX: %v", m.LabelIDs)
+	}
+}
+
+// A listing names each message's conversation; the profile counts them all.
+func TestListMessageRefsAndTotal(t *testing.T) {
+	c, f, _ := newTest(t)
+	a := f.AddMessage(gmailtest.Message{ThreadID: "T1", LabelIDs: []string{"INBOX"}, Raw: rawMsg("a", "x@y")})
+	f.AddMessage(gmailtest.Message{ThreadID: "T2", LabelIDs: []string{"TRASH"}, Raw: rawMsg("b", "x@y")})
+	refs, next, err := c.ListMessageRefs(context.Background(), "", "", "")
+	if err != nil || next != "" || !slices.Equal(refs, []MsgRef{{ID: a, ThreadID: "T1"}}) {
+		t.Fatalf("refs = %v next=%q err=%v, want only %s of T1 (Trash left out)", refs, next, err, a)
+	}
+	if n, err := c.MessagesTotal(context.Background()); err != nil || n != 2 {
+		t.Fatalf("MessagesTotal = %d, %v; want 2", n, err)
+	}
+}
+
 func TestSendPassesThreadID(t *testing.T) {
 	c, f, _ := newTest(t)
 	raw := rawMsg("Re: hi", "reply@x")

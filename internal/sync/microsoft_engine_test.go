@@ -587,6 +587,50 @@ func TestMicrosoftEngine_signInAgain(t *testing.T) {
 	}
 }
 
+// A selection outside Deleted Items moves there in $batch requests of 20,
+// its rows at once; one gone meanwhile fails alone.
+func TestMicrosoftEngine_moveToTrashManyBatches(t *testing.T) {
+	var ids []string
+	var gone string
+	h := newMicrosoft(t, func(f *graphtest.Fake) {
+		for range 24 {
+			ids = append(ids, f.AddMessage(f.FolderID("inbox"), graphtest.Message{Subject: "x"}))
+		}
+		gone = f.AddMessage(f.FolderID("inbox"), graphtest.Message{Subject: "g"})
+	})
+	h.synced()
+	h.f.Delete(gone) // deleted on another device
+
+	bulk, ok := msync.Account(h.eng).(msync.BulkTrasher)
+	if !ok {
+		t.Fatal("the Microsoft engine does not trash in bulk")
+	}
+	reached := 0
+	before := h.f.Count("/v1.0/$batch")
+	failed := bulk.MoveToTrashMany(context.Background(), "INBOX", append(slices.Clone(ids), gone), func(n int) { reached += n })
+
+	if len(failed) != 1 || !errors.Is(failed[gone], graph.ErrNotFound) {
+		t.Fatalf("failed = %v, want only the gone one, not found", failed)
+	}
+	for _, id := range ids {
+		if m, _ := h.f.Message(id); m.FolderID != h.f.FolderID("deleteditems") {
+			t.Errorf("%s is in %s, want Deleted Items", id, m.FolderID)
+		}
+	}
+	if n := h.f.Count("/v1.0/$batch") - before; n != 2 {
+		t.Errorf("%d $batch requests, want 2 (20 + 5)", n)
+	}
+	if reached != 25 {
+		t.Errorf("progress reached %d, want 25", reached)
+	}
+	if got := h.ids("Trash"); !slices.Equal(got, slices.Sorted(slices.Values(ids))) {
+		t.Errorf("Trash rows = %v, want the moved ones right away", got)
+	}
+	if got := h.ids("INBOX"); slices.ContainsFunc(got, func(id string) bool { return slices.Contains(ids, id) }) {
+		t.Errorf("INBOX rows = %v still list moved mail", got)
+	}
+}
+
 // A selection in Deleted Items goes in $batch requests, keeping the guard:
 // one restored meanwhile is refused.
 func TestMicrosoftEngine_permanentDeleteManyBatchesInTrashOnly(t *testing.T) {

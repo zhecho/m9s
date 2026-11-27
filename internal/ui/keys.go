@@ -19,6 +19,7 @@ const (
 	ActionFocusLeft         Action = "focus_left"
 	ActionFocusRight        Action = "focus_right"
 	ActionTabCycle          Action = "tab_cycle"
+	ActionTabCycleBack      Action = "tab_cycle_back"
 	ActionOpen              Action = "open"
 	ActionCompose           Action = "compose"
 	ActionReply             Action = "reply"
@@ -86,7 +87,7 @@ var defaultBindings = map[Action]rune{
 var knownActions = map[Action]bool{
 	ActionNavigateDown: true, ActionNavigateUp: true, ActionScrollPreviewDown: true,
 	ActionScrollPreviewUp: true, ActionFocusLeft: true, ActionFocusRight: true,
-	ActionTabCycle: true, ActionOpen: true, ActionCompose: true, ActionReply: true,
+	ActionTabCycle: true, ActionTabCycleBack: true, ActionOpen: true, ActionCompose: true, ActionReply: true,
 	ActionReplyAll: true, ActionForward: true, ActionDelete: true, ActionMarkUnread: true,
 	ActionStar: true, ActionSync: true, ActionArchive: true, ActionSearchLocal: true,
 	ActionLabels: true, ActionSwitchAccountNext: true, ActionSwitchAccountPrev: true,
@@ -158,6 +159,8 @@ func (km KeyMap) Lookup(ev *tcell.EventKey) Action {
 	switch ev.Key() {
 	case tcell.KeyTab:
 		return ActionTabCycle
+	case tcell.KeyBacktab:
+		return ActionTabCycleBack
 	case tcell.KeyEnter:
 		return ActionOpen
 	}

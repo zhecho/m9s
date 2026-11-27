@@ -730,8 +730,12 @@ behind it.
   unread (`u`) or read 10 a conversation, 5 a message. The local copy
   changes without fetching anything again, and a label change Gmail reports
   (from m9s or another device) is applied without a fetch. 100 selected
-  conversations go to Trash in under 20 seconds; deleting for good in Trash
-  costs 50 units per thousand.
+  conversations go to Trash in under 20 seconds. A bigger selection lists
+  the mailbox once (5 units per 500 messages) and moves the lot 50 units per
+  thousand messages: 1,000 conversations in a 50,000-message mailbox cost
+  about 550–650 units instead of 20,000 (see
+  [Selecting several messages](#selecting-several-messages)).
+  Deleting for good in Trash costs 50 units per thousand.
 - If nothing shows and the Status row is not `● connected`, the reason is on
   the bottom row and in the log. Gmail's reason is in brackets, e.g.
   `gmail: http 403 PERMISSION_DENIED (insufficientPermissions)`: sign in again
@@ -914,6 +918,7 @@ These work from every pane:
 | `j` / `k` | Navigate down / up in the focused pane |
 | `g` / `G` | Jump to the top / bottom of the focused pane |
 | `tab` | Cycle focus between panes: folders, mail list, preview, log pane (when shown) |
+| `shift-tab` | Cycle focus the other way: back to the previous pane |
 | `[` / `]` | Switch to previous / next account |
 | `:` | Command prompt: switch to an account or folder by name; `:help` lists every shortcut |
 | `/` | Filter the whole folder, in the local copy (see [`/` filter](#-filter)) |
@@ -1012,9 +1017,18 @@ is on, only the selected messages it matches are acted on; changing the
 filter drops the ones `A` selected beyond the loaded rows. While an action on
 the selection runs, the status bar says so (`Archiving 412 conversations…`)
 and, every second, how far it got (`Archiving 120 of 412 conversations…`);
-the log notes the count every 10 seconds. Another action waits until it is
-done. Messages that fail stay selected, and
-the status bar says how many.
+the log notes the count every 10 seconds. Another action on a selection is
+refused until it is done (`Still working on the last action; try again when
+it is done`); its messages stay selected. Messages that fail stay selected,
+and the status bar says how many.
+
+On Gmail and Microsoft, `d` on a selection goes in a few requests.
+Microsoft moves twenty messages per `$batch`. Gmail first asks how many
+messages the mailbox holds; when more conversations are selected than
+listing it takes pages (one per 500 messages) plus one, it lists the mailbox
+once (Spam and Trash left out) and moves every message of those
+conversations to Trash, archived ones included, a thousand per request.
+Fewer conversations go one by one.
 
 Terminals keep some modifier clicks for themselves: `cmd`-click is never
 passed to programs on macOS, and many terminals (kitty, Ghostty, iTerm2
@@ -1227,7 +1241,7 @@ help: "?"
 ```
 
 Each value is a single character. Leave blank to keep the default.
-`j`/`k`, `g`/`G`, `tab` and `enter` are fixed and cannot be rebound here. An
+`j`/`k`, `g`/`G`, `tab`, `shift-tab` and `enter` are fixed and cannot be rebound here. An
 unknown action name is skipped, and a key given to two actions stays with the
 one named later in alphabetical order; both are noted in the log (`l`).
 

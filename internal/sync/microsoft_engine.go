@@ -321,25 +321,30 @@ func (e *MicrosoftEngine) Move(ctx context.Context, folder, id, dest string) err
 	if _, err := e.api.Move(ctx, id, destID); err != nil {
 		return err
 	}
-	e.moveRow(folder, id, dest)
+	e.moveRows(folder, []string{id}, dest)
 	return nil
 }
 
-// moveRow shows a move at once: the row leaves folder and, when dest is
-// synced, appears there. The next poll confirms it.
-func (e *MicrosoftEngine) moveRow(folder, id, dest string) {
+// moveRows shows a move at once: the rows leave folder and, when dest is
+// synced, appear there. The next poll confirms it.
+func (e *MicrosoftEngine) moveRows(folder string, ids []string, dest string) {
 	defer kick(e.pollKick)
-	env, ok := e.store.Envelope(e.cfg.Name, folder, id)
+	var envs []*mail.Envelope
+	for _, id := range ids {
+		if env, ok := e.store.Envelope(e.cfg.Name, folder, id); ok {
+			env.Flags = slices.DeleteFunc(env.Flags, func(x string) bool { return x == `\Draft` })
+			envs = append(envs, env)
+		}
+	}
 	e.applyMu.Lock()
 	defer e.applyMu.Unlock()
-	_ = e.store.RemoveMessages(e.cfg.Name, folder, []string{id})
-	if !ok {
+	_ = e.store.RemoveMessages(e.cfg.Name, folder, ids)
+	if len(envs) == 0 {
 		return
 	}
 	for _, f := range e.syncedFolders() {
 		if f.name == dest {
-			env.Flags = slices.DeleteFunc(env.Flags, func(x string) bool { return x == `\Draft` })
-			_ = e.store.AddMessages(e.cfg.Name, dest, []*mail.Envelope{env})
+			_ = e.store.AddMessages(e.cfg.Name, dest, envs)
 		}
 	}
 }
@@ -347,6 +352,43 @@ func (e *MicrosoftEngine) moveRow(folder, id, dest string) {
 // MoveToTrash moves a message to Deleted Items.
 func (e *MicrosoftEngine) MoveToTrash(ctx context.Context, folder, id string) error {
 	return e.Move(ctx, folder, id, msTrash)
+}
+
+// MoveToTrashMany moves ids to Deleted Items in $batch requests of
+// graph.BatchMax moves (BulkTrasher).
+func (e *MicrosoftEngine) MoveToTrashMany(ctx context.Context, folder string, ids []string, progress func(int)) map[string]error {
+	failed := make(map[string]error)
+	if folder == msTrash {
+		for _, id := range ids {
+			failed[id] = fmt.Errorf("already in %s", folder)
+		}
+		progress(len(ids))
+		return failed
+	}
+	trash := e.folderID(msTrash)
+	if trash == "" {
+		err := fmt.Errorf("no folder %q on this account", msTrash)
+		for _, id := range ids {
+			failed[id] = err
+		}
+		progress(len(ids))
+		return failed
+	}
+	for part := range slices.Chunk(ids, graph.BatchMax) {
+		var moved []string
+		for i, err := range e.api.MoveAll(ctx, part, trash) {
+			if err != nil {
+				failed[part[i]] = err
+			} else {
+				moved = append(moved, part[i])
+			}
+		}
+		if len(moved) > 0 {
+			e.moveRows(folder, moved, msTrash)
+		}
+		progress(len(part))
+	}
+	return failed
 }
 
 // noArchiveError is Archive on an account without an archive folder.
@@ -489,7 +531,7 @@ func (e *MicrosoftEngine) TrashDraftCopy(ctx context.Context, id string) error {
 	if _, err := e.api.Move(ctx, id, "deleteditems"); err != nil && !errors.Is(err, graph.ErrNotFound) {
 		return err
 	}
-	e.moveRow(msDrafts, id, msTrash)
+	e.moveRows(msDrafts, []string{id}, msTrash)
 	return nil
 }
 

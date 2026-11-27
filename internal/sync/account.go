@@ -56,6 +56,22 @@ type BulkDeleter interface {
 	PermanentDeleteMany(ctx context.Context, folder string, ids []string, progress func(n int)) (failed map[string]error)
 }
 
+// BulkTrasher is offered by accounts that move many messages of folder to
+// the trash in a few requests, as MoveToTrash does one. progress is told how
+// many more ids were dealt with, done or failed. failed holds the ids not
+// moved, with why.
+type BulkTrasher interface {
+	MoveToTrashMany(ctx context.Context, folder string, ids []string, progress func(n int)) (failed map[string]error)
+}
+
+// BulkThreadTrasher is offered by accounts that move many conversations to
+// the trash as a whole in a few requests, as Threads.TrashThread does one.
+// progress is told how many more conversations were dealt with, done or
+// failed. failed holds the thread ids not trashed, with why.
+type BulkThreadTrasher interface {
+	TrashThreadsMany(ctx context.Context, threadIDs []string, progress func(n int)) (failed map[string]error)
+}
+
 // Labels is offered by accounts whose messages carry labels.
 type Labels interface {
 	AccountLabels() []*mail.Folder // user + system labels that can be applied
